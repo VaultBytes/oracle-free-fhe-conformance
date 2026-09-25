@@ -163,10 +163,39 @@ class Certificate:
 
     @staticmethod
     def from_json(s: str) -> "Certificate":
+        """Parse a certificate, REFUSING any document the signature does not actually cover.
+
+        This used to drop unknown keys and hand the survivors to the constructor, commented
+        "forward-compatible". It was not: `verify()` re-serialises the parsed subset and hashes
+        that, so anything the parser discarded was outside the signature. A certificate carrying
+        `{"NOTE": "this certificate is REVOKED", "achieved_bits_override": 999}` verified VALID,
+        and a document with the key `verdict` twice -- FAIL then PASS -- verified VALID while any
+        first-occurrence parser read FAIL. Both are signature-evasion, not forward compatibility.
+
+        A field genuinely added by a later version cannot be covered by a signature this version
+        knows how to compute, so the only sound answer is to refuse the document and say why.
+        """
         import dataclasses
-        data = json.loads(s)
+
+        def _no_dupes(pairs):
+            seen = set()
+            for k, _ in pairs:
+                if k in seen:
+                    raise ValueError(f"duplicate key {k!r} in certificate: "
+                                     f"parsers disagree on which value is authoritative")
+                seen.add(k)
+            return dict(pairs)
+
+        data = json.loads(s, object_pairs_hook=_no_dupes)
         known = {f.name for f in dataclasses.fields(Certificate)}
-        return Certificate(**{k: v for k, v in data.items() if k in known})   # forward-compatible
+        extra = sorted(set(data) - known)
+        if extra:
+            raise ValueError(f"certificate carries field(s) the signature does not cover: "
+                             f"{', '.join(extra)}")
+        missing = sorted(known - set(data) - {"attested", "n_report"})
+        if missing:
+            raise ValueError(f"certificate is missing signed field(s): {', '.join(missing)}")
+        return Certificate(**{k: v for k, v in data.items() if k in known})
 
     @property
     def is_pass(self) -> bool:
@@ -448,7 +477,7 @@ def run_invariants(be, rounds: int, seed: int, profile: str, floors: dict) -> li
 # ------------------------------------------------------------------------------------------------
 # #4 Optional primitive-layer attestation (RNS op family: NTT/automorphism/keyswitch laws)
 # ------------------------------------------------------------------------------------------------
-def primitive_attestation(rounds: int = 6) -> Optional[dict]:
+def primitive_attestation(rounds: int = 6, challenge_seed=None) -> Optional[dict]:
     """Run the oracle-free RNS-primitive invariants (ckks_golden/ofc_invariants) on the reference op
     family. Attests the PRIMITIVE family conforms (NTT linearity, automorphism group law, keyswitch
     identity). Honestly labelled: this is the reference RNS family, not the SDK's software backend."""
@@ -460,7 +489,7 @@ def primitive_attestation(rounds: int = 6) -> Optional[dict]:
         from ckks_golden.ofc_invariants import Device, certify, verdict   # type: ignore
         from ckks_golden.keyswitch import Context                         # type: ignore
         ctx = Context(N=16, L=6, alpha=3, prime_bits=60)
-        res = certify(Device(ctx), rounds=rounds)
+        res = certify(Device(ctx), rounds=rounds, seed=challenge_seed)
         # certify() returns three-valued Verdicts (PASS / FAIL / NOT TESTED). Record the code, not
         # a bool: collapsing NOT TESTED into a bool is how an untested law came to read as a passing
         # one. `verdict()` is CONFORMANT only when every invariant was actually tested and passed.
@@ -582,7 +611,7 @@ def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, f
                          n_report=None):
     """Build + sign a Certificate from judged invariants. Shared by the local judge and the
     conformance server so both emit identical certificates (only the signer differs)."""
-    prim = primitive_attestation() if with_primitive else None
+    prim = primitive_attestation(challenge_seed=challenge_seed) if with_primitive else None
     adv = adversarial_attestation(challenge_seed) if (with_adversarial and challenge_seed is not None) else None
     app = application_conformance(invs, op_trace)
     comp = composition_conformance(invs, op_trace, floors)

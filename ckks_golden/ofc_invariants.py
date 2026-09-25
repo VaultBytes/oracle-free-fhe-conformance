@@ -89,6 +89,8 @@ Run:  python3 -m ckks_golden.ofc_invariants      (from the repository root)
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
+
 from .encode import decode_poly, encode_poly
 from .galois import automorphism_coeff, inverse_g
 from .keyswitch import (Context, _det_poly, hybrid_keyswitch, make_inputs,
@@ -450,9 +452,16 @@ INVARIANTS = [
 ]
 
 
-def certify(device, rounds=8):
-    """Certify a device purely by algebraic invariants on `rounds` deterministic inputs
-    each. Returns {invariant: Verdict}. NO golden reference is consulted anywhere.
+def certify(device, rounds=8, seed=None):
+    """Certify a device purely by algebraic invariants. Returns {invariant: Verdict}. NO golden
+    reference is consulted anywhere.
+
+    `seed` is the authority's fresh challenge. Without it the per-round inputs were
+    `0x1000 * r + 7` -- eight constants written in this file -- so the entire attestation was a
+    fixed, published test vector set. A device implementing no NTT, no automorphism and no
+    key-switching could memorise those eight answers and certify CONFORMANT, which is exactly the
+    precomputation the attested protocol exists to defeat, alive inside the attestation section.
+    Callers that pass no seed get the legacy constants and a test that proves correspondingly less.
 
     Aggregation over rounds: any FAIL is FAIL; otherwise any NOT TESTED is NOT TESTED;
     otherwise PASS. `bool(Verdict)` is True only for PASS, so `all(res.values())` is a
@@ -461,7 +470,9 @@ def certify(device, rounds=8):
     for name, fn in INVARIANTS:
         agg = PASS
         for r in range(rounds):
-            v = fn(device, 0x1000 * r + 7)
+            probe = (0x1000 * r + 7) if seed is None else \
+                    (int.from_bytes(_hashlib.sha256(f"{int(seed)}:{r}".encode()).digest()[:8], "big") | 1)
+            v = fn(device, probe)
             if not isinstance(v, Verdict):
                 v = _v(bool(v))
             if v.code == "FAIL":

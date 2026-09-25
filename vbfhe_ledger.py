@@ -93,7 +93,7 @@ class ConformanceLedger:
         logged = any(e.cert_id == cert_id and e.kind == "issue" for e in self._entries)
         rev = next((e for e in self._entries if e.cert_id == cert_id and e.kind == "revoke"), None)
         return {"cert_id": cert_id, "logged": logged, "revoked": rev is not None,
-                "reason": (rev.detail if rev else None), "head": self.head()}
+                "reason": (rev.detail if rev else None), "head": self.head(), "size": self.size()}
 
     def head(self) -> str:
         return self._entries[-1].entry_hash if self._entries else GENESIS
@@ -101,8 +101,15 @@ class ConformanceLedger:
     def size(self) -> int:
         return len(self._entries)
 
-    def verify_chain(self) -> bool:
-        """Recompute the hash chain — any tampering with history breaks it."""
+    def verify_chain(self, expect_head: str | None = None, expect_size: int | None = None) -> bool:
+        """Recompute the hash chain, and optionally check it against a commitment.
+
+        The chain alone cannot detect TAIL TRUNCATION. It is walked forward from genesis, so
+        deleting the last entries leaves a shorter chain that still verifies -- and a revocation is
+        always the newest entry for its certificate, so dropping one line silently un-revokes a
+        certificate while `verify_chain()` still returns True. Pass the head and size from an
+        authority-signed commitment, or from the last head you saw, to catch it.
+        """
         prev = GENESIS
         for e in self._entries:
             core = {"seq": e.seq, "kind": e.kind, "cert_id": e.cert_id,
@@ -110,14 +117,42 @@ class ConformanceLedger:
             if e.prev_hash != prev or e.entry_hash != _entry_hash(prev, core):
                 return False
             prev = e.entry_hash
+        if expect_size is not None and len(self._entries) < int(expect_size):
+            return False                      # truncated: fewer entries than were committed to
+        if expect_head is not None and prev != expect_head:
+            return False
         return True
 
     def entries(self) -> list:
         return [asdict(e) for e in self._entries]
 
 
-def check_cert_status(cert, status: dict) -> bool:
-    """A verifier's ledger check: the cert must be LOGGED, NOT REVOKED, and the status must be for
-    THIS certificate (its manifest hash). Returns True iff trustworthy per the ledger."""
-    return bool(status and status.get("cert_id") == cert.manifest_sha256
-                and status.get("logged") and not status.get("revoked"))
+def check_cert_status(cert, status: dict, signed_head: dict | None = None,
+                      seen_size: int | None = None, hmac_key: bytes | None = None) -> bool:
+    """A verifier's ledger check: LOGGED, NOT REVOKED, for THIS certificate, from an untruncated log.
+
+    `status` alone is not sufficient and used to be treated as though it were. It is an unsigned
+    dictionary, so a log that has had its tail removed reports `revoked: False` for a certificate it
+    previously revoked, and the hash chain still verifies because it is walked forward from genesis.
+
+    Pass `signed_head` (from the authority's /v0/log endpoint) to bind the answer to a commitment
+    the authority signed, and `seen_size` -- the largest size you have previously observed -- to
+    reject a log that has gone backwards. A ledger check without at least one of these establishes
+    that the certificate was not revoked *in the copy of the log you were shown*, which is a
+    weaker statement than it appears.
+    """
+    if not (status and status.get("cert_id") == cert.manifest_sha256
+            and status.get("logged") and not status.get("revoked")):
+        return False
+    if seen_size is not None and int(status.get("size", -1)) < int(seen_size):
+        return False                          # the log shrank: entries were removed
+    if signed_head is not None:
+        from vbfhe_signing import verify_signature
+        body = f"{signed_head.get('head')}:{signed_head.get('size')}".encode()   # ConformanceServer.signed_head
+        if not verify_signature(signed_head.get("algo"), body, signed_head.get("signature"),
+                                signed_head.get("public_key"), hmac_key=hmac_key):
+            return False
+        if status.get("head") != signed_head.get("head") or \
+           int(status.get("size", -1)) != int(signed_head.get("size", -2)):
+            return False
+    return True

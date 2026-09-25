@@ -11,7 +11,7 @@
       "public-seed": true,
       "stage-manifest": true
     },
-    "challenge_seed": 146881495,
+    "challenge_seed": 450596867,
     "resistant": true,
     "subject": "reference-RNS (NOT the device under test)"
   },
@@ -38,7 +38,7 @@
     "keyswitch_rotation": 15.0,
     "plainmul_distributive": 15.0
   },
-  "challenge_seed": 1437364787049741271,
+  "challenge_seed": 4175787687767937027,
   "composition": {
     "chain_len": 1,
     "conformant": null,
@@ -48,34 +48,34 @@
     "enforced": false,
     "meaning": "honest engines derive pmul from the add ciphertext, so this is strongly positive; an independent fabricator sits near zero regardless of how well it matches error magnitude. DIAGNOSTIC ONLY -- not gated, false-refusal rate on real engines is uncharacterised.",
     "pairs": 256,
-    "pearson_r": 0.9714
+    "pearson_r": 0.9656
   },
   "floor_source": "ckks_golden.noise_model(worst)-tol",
   "invariants": [
     {
-      "achieved_bits": 15.52,
+      "achieved_bits": 15.5,
       "blind": false,
       "floor_bits": 6.0,
       "name": "add_homomorphism",
       "passed": true
     },
     {
-      "achieved_bits": 14.2,
+      "achieved_bits": 14.98,
       "blind": false,
       "floor_bits": 6.0,
       "name": "plainmul_distributive",
       "passed": true
     },
     {
-      "achieved_bits": 11.07,
+      "achieved_bits": 11.13,
       "blind": false,
       "floor_bits": 6.0,
       "name": "ctmul_distributive",
       "passed": true
     }
   ],
-  "issued_at": 1790367221.168,
-  "manifest_sha256": "a6230edd997ab20cff11f3f32b8f30f0e4b5442bdc05780a9a5b8fc0c5126675",
+  "issued_at": 1790371621.205,
+  "manifest_sha256": "6ef1042ebe5bd83174b806444e30a465d564041de32f7394bdd26b3faf60a996",
   "method": "oracle-free-algebraic-invariants/v0.2",
   "n_report": 64,
   "op_trace": [
@@ -116,11 +116,11 @@
     "verdict": "CONFORMANT"
   },
   "probe_profile": "workload",
-  "public_key": "28f2015e76a76e1f5ea0a3946070ec11305bb725169eb198426d51aab5bc5d37",
+  "public_key": "e05eb131354cab3a996c111c895ea3156c3ef6a7b3937f124d773dc66a3138b6",
   "result_digest": null,
   "rounds": 4,
   "session_id": "sess-0a59bc5d1be08fd0",
-  "signature": "b2959b92e1200026d77acc5a57bc85829375b820fbd157ceee9b05d2543b87f002829f975e055bd54a16814721ceca1f0a9c02951d055d01c9f1c8964d4d5e0c",
+  "signature": "8a4c35112d8a720330dad8db05fe0495e6519e90ba7043711de15527e19cbe93f22beaaffd289376ac656e93e9f074661f0eed48e01d9e2918fc1a400e7e7b09",
   "signature_algo": "ed25519",
   "signer": "vbfhe-conformance-service/authority",
   "verdict": "PASS",
