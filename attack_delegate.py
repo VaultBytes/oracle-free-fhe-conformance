@@ -11,8 +11,8 @@ WHAT THE DELEGATE DOES
   * receives the authority's fresh single-use seed;
   * re-derives the challenge probes with numpy, because the derivation is public code in this
     very repository;
-  * computes the answers in float64 -- a + b, (a+b)*w, (a+b)*c, and a cyclic roll for the
-    rotation -- with no ring, no ciphertext, no key, and no CKKS anywhere;
+  * computes the answers in float64, a + b, (a+b)*w, (a+b)*c, and a cyclic roll for the
+    rotation, with no ring, no ciphertext, no key, and no CKKS anywhere;
   * adds Gaussian noise scaled to land at whatever precision it likes;
   * returns the decoded values.
 
@@ -38,13 +38,13 @@ WHY THE OBVIOUS DEFENCE DOES NOT CLOSE IT
 
       honest SoftwareCKKS   r = 0.958     (our own reference implementation)
       honest OpenFHE        r = 0.124     (a production library)
-      this painter @ 47b    r = 0.136     -- ABOVE honest OpenFHE
+      this painter @ 47b    r = 0.136    , ABOVE honest OpenFHE
       this painter @ 31b    r = 0.004
 
   So the separation is clean against the reference and absent against OpenFHE, where an honest
   engine scores below a delegate. It is reported as a diagnostic and deliberately not enforced.
   A delegate that wanted to defeat it anyway would carry one error vector per probe ciphertext
-  and push it through the plaintext circuit, which is still O(n) -- error algebra rather than
+  and push it through the plaintext circuit, which is still O(n), error algebra rather than
   error magnitude, and more than three lines, but not more than a morning.
 
 THE POINT
@@ -54,7 +54,7 @@ THE POINT
   evaluating the circuit homomorphically, so no cost-based or throughput-based defence works
   either: the delegate is faster than the honest engine, not slower.
 
-  Soundness against this adversary requires moving the transcript into the ciphertext domain --
+  Soundness against this adversary requires moving the transcript into the ciphertext domain 
   verifiable FHE, a hardware root of trust, or custody of the device by the auditor. It cannot be
   recovered by tightening a precision band.
 """

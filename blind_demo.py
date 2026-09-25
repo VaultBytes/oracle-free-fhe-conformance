@@ -53,7 +53,7 @@ def main() -> int:
     print("\nCONTROL  the evaluator must be unable to decrypt, or the rest is decorative")
     print(f"  secret removed and decrypt refuses : {selftest_blindness(dev)}")
     if not selftest_blindness(dev):
-        print("  CONTROL FAILED -- aborting, the comparison below would mean nothing")
+        print("  CONTROL FAILED, aborting, the comparison below would mean nothing")
         return 1
 
     def verdict(meas):

@@ -31,7 +31,7 @@ rests on. Three further problems go with it:
   * the cost argument stops being inverted, because forging costs about what honest evaluation
     costs, so probe volume becomes a usable binding on hardware class;
   * the device never decrypts anything, so the approximate-decryption oracle that the attested
-    path creates -- an IND-CPA-D exposure on the device's own key -- simply does not arise;
+    path creates, an IND-CPA-D exposure on the device's own key, simply does not arise;
   * the precision floor is derived from parameters the AUTHORITY chose, so a respondent can no
     longer declare the parameters that set its own bar.
 

@@ -1,95 +1,89 @@
 # Oracle-Free FHE Conformance (OFC)
 
-A conformance suite that checks whether a CKKS implementation computes correctly, using the
-scheme's own algebraic laws, without decrypting user data and without shipping a stored golden
-output vector. It emits a signed, independently verifiable certificate.
+A conformance suite that checks whether a CKKS implementation computes correctly. It uses the
+scheme's own algebraic laws, it does not decrypt user data, and it ships no stored golden output
+vector. On success it emits a signed certificate a third party can verify.
 
-Read the next section before you rely on it for anything.
+Read the next two sections before you rely on it for anything.
 
-## What this establishes, and what it does not
+## A respondent that does no FHE can pass the attested protocol
 
-**A respondent that performs no homomorphic encryption at all can obtain a signed PASS.** We ship
-the attack so you can check:
+We ship the attack so you can check it yourself.
 
 ```
 python3 attack_delegate.py
 ```
 
-It takes the authority's fresh seed, re-derives the challenge probes with numpy because the
-derivation is public code in this repository, computes the answers in float64, adds noise scaled to
-whatever precision it likes, and returns them. No ring, no ciphertext, no key. It passes.
+It takes the authority's fresh seed, re-derives the challenge probes with numpy, computes the
+answers in float64, adds noise scaled to whatever precision it likes, and returns them. It holds no
+ring, no ciphertext and no key. It passes.
 
-That is not a bug we intend to fix. Every correct CKKS implementation returns the same decoded
-values, to within the precision its parameters permit, so a protocol observing only decoded values
-cannot tell which implementation produced them. Producing those values by other means is also
-*cheaper* than evaluating the circuit homomorphically, so throughput and latency defences fail in
-the same direction: the delegate is faster than the honest engine, not slower.
+The reason is not a loose threshold. Producing CKKS's decoded output costs far less than evaluating
+CKKS, so a dishonest respondent is faster than an honest one. Raising the probe volume or tightening
+a timing bound therefore punishes the honest party. Every cost-based defence runs backwards.
 
-So the suite is sound against implementations that are **wrong**, and unsound against respondents
-that are **dishonest**. Those are different threat models and only the first one is ours.
+So the attested protocol is sound against implementations that are wrong. It is not sound against
+respondents that are dishonest. Those are different threat models and only the first is ours.
 
 | it catches | it does not catch |
 |---|---|
-| a consistently-wrong engine (wrong key, wrong scale) | a respondent computing the answers elsewhere |
+| a consistently wrong engine (wrong key, wrong scale) | a respondent computing the answers elsewhere |
 | a broken rotation or key-switch | a respondent computing them in plaintext and adding noise |
 | arithmetic that misses its noise-theoretic floor | which of several correct engines answered |
-| exact arithmetic reporting impossible precision | an engine that routes conformance probes to a slow, correct path |
+| exact arithmetic reporting impossible precision | an engine that routes probes to a slow, correct path |
 
-Use it as a test for error. Do not use it as a test for fraud.
+## The fix is to let the authority hold the key
 
-## The fix: let the authority hold the key
+```
+python3 blind_demo.py
+```
 
-`blind_demo.py` shows the resolution, and it is a protocol change rather than a threshold.
+The attested protocol sends a seed. The device derives the probes in the clear, encrypts under its
+own key, evaluates, decrypts, and returns numbers. Everything the delegate needs is handed to it.
 
-The attested protocol sends a *seed*: the device derives the probes in the clear, encrypts under
-its own key, evaluates, decrypts and returns numbers. Everything the delegate needs is handed to
-it in plaintext, and the cheapest correct answer is an O(n) plaintext computation against an
-O(l*N log N) homomorphic one. The delegate is faster than the honest engine, which is why raising
-probe volume or tightening timing makes things worse rather than better.
-
-The blind protocol inverts who holds the key. The authority builds the context, encrypts the
-probes itself, and sends ciphertexts plus the public evaluation key. The device evaluates without
-ever holding the secret and returns ciphertexts. The authority decrypts with a key it never
-shared. Measured:
+The blind protocol inverts that. The authority builds the context, encrypts the probes itself, and
+sends ciphertexts with the public evaluation key. The device evaluates without ever holding the
+secret and returns ciphertexts. The authority decrypts with a key it never shared.
 
 ```
 honest blind device            PASS   16.31 / 16.67 / 12.22 bits, floor 6.0
-delegate: return an input      FAIL    0.14 / -0.29 / -0.50
-delegate: encrypt a guess      FAIL   -0.00 /  0.00 / -0.00
-delegate: float64 + noise      UNAVAILABLE -- the probes cannot be read
+delegate, returns an input     FAIL    0.14 / -0.29 / -0.50
+delegate, encrypts a guess     FAIL   -0.00 /  0.00 / -0.00
+delegate, float64 plus noise   UNAVAILABLE
 ```
 
-Three other problems go with it. Forging now costs about what honest evaluation costs, so the
-cost argument stops being inverted and probe volume becomes usable. The device never decrypts, so
-the approximate-decryption oracle the attested path creates on its own key does not arise. And the
-floor derives from parameters the authority chose, so a respondent can no longer declare the bar
-it will be judged against.
+That last line is the point. The attack is not defeated, it is unavailable. A delegate cannot read
+the probe values out of the ciphertexts it receives, so it has nothing to compute an answer from.
+
+Three other problems go with the same change. Forging now costs about what honest evaluation costs,
+so probe volume becomes a usable binding on hardware class. The device never decrypts, so the
+approximate-decryption oracle that the attested path creates on its own key does not arise. And the
+floor derives from parameters the authority chose, so a respondent can no longer declare the bar it
+will be judged against.
 
 What it does not fix: a delegate may forward the ciphertexts to a real CKKS library elsewhere. The
-certificate then says correct CKKS evaluation happened *somewhere* under the authority's
-parameters, and narrowing that to a named device is what custody or a hardware root of trust is
-for. If you need the second, you need
-verifiable FHE, a hardware root of trust, or physical custody of the device — and note that custody
-of the box is not custody of the computation, since the host driver can answer in float64 without
-ever touching the accelerator.
+certificate then says that correct CKKS evaluation happened somewhere under the authority's
+parameters. Narrowing somewhere to here is what custody or a hardware root of trust is for.
 
 ## Install and run
 
 ```
 pip install -r requirements.txt
-python3 certify_attested_demo.py        # honest engine passes, injected fault is caught
-python3 certify_crossvendor_demo.py     # one authority, two implementations
-python3 attack_delegate.py              # the attack above
+python3 certify_attested_demo.py     # honest engine passes, injected fault is caught
+python3 certify_crossvendor_demo.py  # one authority, two implementations
+python3 attack_delegate.py           # the attack above
+python3 blind_demo.py                # the same delegate against the blind protocol
 ```
 
-`numpy` is pinned below 2.0 on purpose, see below. `cryptography` is required. `openfhe` is
-optional and genuinely skipped when absent: the cross-vendor demo reports the OpenFHE vendor as
-SKIPPED and says plainly that the cross-vendor claim is not established by that run. OpenFHE has no
-universal wheel, so reproducing its column means building it for your platform.
+We pin numpy below 2.0 on purpose, for the reason given in the limitations. `cryptography` is
+required. `openfhe` is optional and genuinely skipped when absent, in which case the cross-vendor
+demo reports that vendor as skipped and states plainly that the cross-vendor claim is not
+established by that run. OpenFHE has no universal wheel, so reproducing its column means building it
+for your platform.
 
 ## What you should see
 
-The honest engine passes and the injected fault is caught:
+The honest engine passes and the injected fault is caught.
 
 ```
 HONEST engine                             verdict: PASS
@@ -103,69 +97,62 @@ CONSISTENTLY-WRONG engine (+0.5 offset)   verdict: FAIL
   [FAIL] ctmul_distributive      4.68b (floor 6.0)
 ```
 
-Precision figures move by several bits between runs, because the probes are random and there is no
-seed flag to pin them. The reproducible claim is the verdict, not the bit count. The faulted engine
-has been observed as close as one bit from its floor, so do not read the gap above as typical.
+Precision moves by several bits between runs, because the probes are random and there is no flag to
+pin them. The reproducible claim is the verdict, not the bit count. Over 100 runs the faulted engine
+fails every time, with medians of 1.77, 1.19 and 1.25 bits, and it has been observed within one bit
+of its floor. Do not read the gap above as typical.
 
-## Known limitations in this implementation
+## Known limitations
 
-We would rather you find these here than in a certificate.
+We would rather you found these here than in a certificate.
 
 **The noise model covers encoding rounding only.** It has no fresh-encryption error, no
-relinearization noise, no rescale rounding, and no key-switching noise: `keyswitch_rotation` derives
-its ceiling from `encode_bits`, treating key-switching as noiseless. Consequently the published
-floors carry 9 bits of hand-set slack (`CONFORMANCE_TOLERANCE_BITS` 6.0 plus
-`ATTESTED_KNOWN_ANSWER_MARGIN` 3.0) which absorbs the model error. Real engines have been measured
-several bits below the model's nominal worst-case ceiling, so that ceiling should not be used as an
-upper acceptance edge until the model includes the missing terms.
+relinearization noise, no rescale rounding, and no key-switching noise. `keyswitch_rotation` derives
+its ceiling from `encode_bits`, which treats key-switching as noiseless. The published floors
+therefore carry nine bits of hand-set slack, being `CONFORMANCE_TOLERANCE_BITS` 6.0 plus
+`ATTESTED_KNOWN_ANSWER_MARGIN` 3.0, and that slack absorbs the model error. Real engines measure
+several bits below the model's nominal worst case, so do not use that ceiling as an upper acceptance
+edge until the missing terms are added.
 
-**Probe keys are not separate from production keys.** The attested path runs probes on the same
-backend instance, hence the same secret key, that encrypted the user's data, and publishes decoded
-results to the authority. That is an approximate-decryption oracle in the IND-CPA-D sense. Use a
-throwaway context for certification until this is fixed.
+**numpy is pinned below 2.0.** `ckks_golden/bootstrap.py` uses
+`np.polynomial.polyutils.RankWarning`, which NumPy 2.0 removed. Under numpy 2 the adversarial audit
+raised, the handler swallowed the error, and the authority issued a signed PASS with that
+attestation silently absent.
+
+**Probe keys are not separate from production keys in the attested path.** It runs probes on the
+same backend instance, and therefore the same secret key, that encrypted the user's data, then
+publishes decoded results to the authority. That is an approximate-decryption oracle. Use the blind
+protocol, or a throwaway context.
 
 **Two certificate sections describe the reference, not your device.** `primitive_conformance` and
 `adversarial_audit` are labelled `subject: reference-RNS (NOT the device under test)`. They attest
 that the primitive laws hold for a correct implementation. They say nothing about the engine being
-certified, and they do not gate its verdict — though a section that *errors* now does, so a broken
-dependency can no longer produce a silent PASS.
+certified and they do not gate its verdict, though a section that errors or fails now does.
 
 **Coverage is four algebraic laws at depth one.** Add, plaintext multiply, ciphertext multiply and
-one rotation, on fresh ciphertexts, scored over 64 slots, minimum across four rounds. Untested:
-deeper levels, rescaling chains, conjugation, relinearization as a separate law, bootstrapping, and
-edge cases. There is no fault-detection-probability argument.
+one rotation, on fresh ciphertexts, scored over 64 slots, minimum across four rounds. Deeper levels,
+rescaling chains, conjugation, relinearization as a separate law, bootstrapping and edge cases are
+untested. There is no fault-detection-probability argument.
 
-**The device declares the parameters that set its own floor.** `N` and `scale_bits` come from the
-request with only a range check.
+**In the attested path the device declares the parameters that set its own floor.** `N` and
+`scale_bits` come from the request with only a range check. The blind protocol resolves this,
+because the authority chooses them.
 
-## Fixed in the second revision
+## Hardening
 
-The authority now issues the slot COUNT, the slot WINDOW and the rotation requirement with its
-challenge. Previously the examined slots were always `[0:64]`, a fixed public window, so an engine
-correct on 64 of 4096 slots and arbitrary on the other 4032 was certified; and `has_ks = "ks" in
-outputs` meant a wrong-rotation engine could delete one JSON key and watch the invariant vanish from
-a signed PASS. A reference attestation that FAILS now also fails the verdict, where before only one
-that ERRORED did.
-
-`attack_delegate.py` was updated to speak the new protocol and still passes. That is the point: the
-hardening closes protocol evasions and does not touch delegation.
-
-## Fixed in the first revision
-
-For anyone comparing against the first published commit: responses claiming more precision than the declared scale can carry are now refused rather than
-silently clamped to a passing value, though that edge is a hand-set sanity bound and not the
-noise-theoretic ceiling, which honest engines exceed and which therefore cannot be enforced; a response that misstates its round count, slot
-count or round vectors against the issued challenge is now rejected; an errored attestation section
-now fails the verdict instead of being waved through; a missing noise model now refuses instead of
-substituting a laxer floor; all five sites that put the clone's parent directory ahead of the package on the import path
-now append instead of inserting, so the reference package can no longer be shadowed; numpy is pinned below 2.0; the OpenFHE import is guarded; and six references to files
-that were never published have been removed.
+This suite was put through four rounds of adversarial review, and the commit history records what
+each round changed and why. The short version: the authority now issues the slot count, the slot
+window and the rotation requirement with its challenge, an attestation section that errors or fails
+no longer passes the verdict, an absent reference package refuses rather than substituting a laxer
+threshold, a certificate carrying anything the signature does not cover is refused, the log status
+is checked against a signed head and against the largest size previously seen, and the primitive
+probes derive from the authority's fresh challenge.
 
 ## Repository contents
 
-The conformance suite, the attested protocol, the authority, signing and verification, an
-append-only transparency log with revocation, two backends, and the CKKS reference oracles in
-`ckks_golden/` that the suite scores against.
+The conformance suite, both protocols, the authority, signing and verification, an append-only
+transparency log with revocation, two backends, and the CKKS reference oracles in `ckks_golden/`
+that the suite scores against.
 
 Not included: application cartridges, the threshold and multiparty layer, the hardware backend, and
 the chip lowering path. None is needed to reproduce anything here.
