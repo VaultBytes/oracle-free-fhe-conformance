@@ -1,6 +1,6 @@
 """Negacyclic NTT over Z_q[X]/(X^N + 1), merged psi form.
 
-Convention (documented in docs/CKKS_GOLDEN_MODEL.md):
+Convention:
   * psi = primitive 2N-th root of unity mod q (psi^N == -1).
   * FORWARD: Cooley-Tukey decimation-in-time (Longa-Naehrig Alg.1). Input in
     NATURAL order, output in BIT-REVERSED order. Twiddles psi^{brv(k)}.

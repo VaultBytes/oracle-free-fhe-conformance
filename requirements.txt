@@ -1,4 +1,9 @@
-numpy>=1.24
+# numpy is PINNED below 2.0 deliberately. ckks_golden/bootstrap.py uses
+# np.polynomial.polyutils.RankWarning, removed in NumPy 2.0. Under numpy>=2 the
+# adversarial-audit section raised AttributeError, was swallowed, and the authority
+# still issued a signed PASS with that attestation silently missing. See SECURITY.md.
+numpy>=1.24,<2
 cryptography>=41.0
-# openfhe is OPTIONAL. Without it the OpenFHE backend is skipped and the
-# SoftwareCKKS reference still runs. See README.
+# openfhe is genuinely optional and genuinely skipped: certify_crossvendor_demo.py
+# guards the import and reports the OpenFHE vendor as SKIPPED when it is absent.
+# It has no universal wheel; without it the OpenFHE column cannot be reproduced.

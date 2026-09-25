@@ -35,7 +35,7 @@ representative per slot.  The convention taken here (HEAAN, OpenFHE, Lattigo) is
 5 is not magic: any base b with ord(b mod 2N) = N/2 and -1 not in <b> gives an
 equally valid slot ordering, and SEAL in fact uses 3 (GaloisTool::generator_ = 3
 in native/src/seal/util/galois.h) with its own matching order.
-rotation_check.py tabulates which bases qualify.
+the rotation cross-check (not included) tabulates which bases qualify.
 
 This ordering is not cosmetic.  The Galois automorphisms sigma_g : a(X) ->
 a(X^g) compose by MULTIPLYING exponents, sigma_{g1} . sigma_{g2} = sigma_{g1 g2}.
@@ -44,7 +44,7 @@ moves slot j+k to slot j: a cyclic rotation of the slot vector by k, and
 rotations compose additively because 5^{k1} * 5^{k2} = 5^{k1+k2}.  Any
 assignment k -> g(k) that is not exponential in k cannot realise rotation,
 because rotation is additive in k and the group law on exponents is
-multiplicative.  `rotation_check.py` settles this experimentally rather than by
+multiplicative.  `the rotation cross-check (not included)` settles this experimentally rather than by
 assertion.
 
 SPARSE PACKING -- THE TILING RULE, PRECISELY
@@ -70,7 +70,7 @@ lies in the fixed subring
     Z[X^{N/(2s)}]/(X^N + 1)  ~=  Z[Y]/(Y^{2s} + 1),   Y = X^{N/(2s)}
 
 so ONLY every (N/(2s))-th coefficient of the encoded polynomial is non-zero.
-That structural consequence is checkable and is checked (encode_check.py, part
+That structural consequence is checkable and is checked (the encode cross-check (not included), part
 C): if the tiling rule were block-expansion the sparsity would not appear.  The
 block-expanded vector is not <5^s>-invariant and encodes to a dense polynomial.
 
@@ -82,7 +82,7 @@ PRECISION AND DETERMINISM
 -------------------------
 The transform is a single length-2N complex FFT in each direction -- O(N log N),
 one complex128 array of 2N entries (512 KiB at N=16384).  A dense Vandermonde
-matrix would be O(N^2) and ~4 GiB at N=16384; `encode_check.py` part A
+matrix would be O(N^2) and ~4 GiB at N=16384; `the encode cross-check (not included)` part A
 cross-checks this FFT path against that dense definition at small N, where the
 dense form is affordable, so the fast path is tied to the textbook one.
 
@@ -170,7 +170,7 @@ def encode_poly(n: int, slots, scale, n_slots: int | None = None,
     round(scale * sigma^{-1}(z_full)).
 
     `indices` exists ONLY so the control suite can corrupt the transform
-    through the production code path (encode_check.py part D).  Leave it None.
+    through the production code path (the encode cross-check (not included) part D).  Leave it None.
     """
     n_slots, idx = _resolve(n, n_slots, indices)
     two_n = 2 * n

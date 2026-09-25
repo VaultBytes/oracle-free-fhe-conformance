@@ -12,7 +12,7 @@ Two extra hooks let the conformance layer handle OpenFHE's opaque ciphertext (no
   ct_equal(x, y)   -> bool     (for the blind add-commutativity invariant)
 
 Uses FIXEDMANUAL scaling so the SDK's explicit `rescale(mul(...))` calls behave as written, and
-HEStd_NotSet so small demo ring dimensions are allowed (mirrors attention_openfhe.py:174-191).
+HEStd_NotSet so small demo ring dimensions are allowed (mirrors the private attention harness (not included):174-191).
 """
 from __future__ import annotations
 

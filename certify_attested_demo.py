@@ -8,7 +8,7 @@ ATTESTED path fixes both: the server issues a blinded challenge, the device runs
 throwaway probes and returns the decoded outputs, and the server — which KNOWS the answers it seeded —
 scores them. This demo shows an honest engine PASS and a consistently-wrong engine CAUGHT.
 
-Run (from runtime/vbfhe/sdk/):  python3 certify_attested_demo.py
+Run (from the repository root):  python3 certify_attested_demo.py
 """
 import numpy as np
 

@@ -10,9 +10,9 @@ No user data is involved. A device can neither fabricate nor be consistently-wro
 
   Vendor A: OpenFHE (production CKKS library, CPU) — includes attested KEYSWITCH (rotation) coverage.
   Vendor B: SoftwareCKKS (independent reference implementation).
-  Vendor C: GLIDE on an NVIDIA A100 (GPU) — separately demonstrated; see GLIDE_A100_CONFORMANCE_RESULT.md.
+  Vendor C: GLIDE on an NVIDIA A100 (GPU) — separately demonstrated; see the GLIDE A100 run (not included in this distribution).
 
-Run (from runtime/vbfhe/sdk/):  python3 certify_crossvendor_demo.py
+Run (from the repository root):  python3 certify_crossvendor_demo.py
 """
 import json
 import os
@@ -20,7 +20,13 @@ import os
 import numpy as np
 
 from vbfhe_sdk import Session
-from vbfhe_backend_openfhe import OpenFHEBackend
+try:
+    from vbfhe_backend_openfhe import OpenFHEBackend
+    _HAVE_OPENFHE = True
+except ImportError as _e:                      # openfhe is a heavy optional native dep
+    OpenFHEBackend = None
+    _HAVE_OPENFHE = False
+    _OPENFHE_WHY = str(_e)
 from vbfhe_backend_ckks import SoftwareCKKS
 from vbfhe_conformance import AttestedRemoteConformanceService
 from vbfhe_server import ConformanceServer, in_process_transport
@@ -46,18 +52,34 @@ def certify(label, backend, server):
 
 if __name__ == "__main__":
     server = ConformanceServer()                              # one authority certifies both vendors
-    a = certify("Vendor A — OpenFHE (production CKKS lib)",
-                OpenFHEBackend(ring_dim=8192, scale_bits=40, depth=4), server)
-    b = certify("Vendor B — SoftwareCKKS (independent impl)", "software", server)
-
     os.makedirs(EX, exist_ok=True)
-    open(os.path.join(EX, "crossvendor_openfhe_cert.json"), "w").write(a.to_json())
+
+    a = None
+    if _HAVE_OPENFHE:
+        a = certify("Vendor A — OpenFHE (production CKKS lib)",
+                    OpenFHEBackend(ring_dim=8192, scale_bits=40, depth=4), server)
+        open(os.path.join(EX, "crossvendor_openfhe_cert.json"), "w").write(a.to_json())
+    else:
+        print("\nVendor A — OpenFHE: SKIPPED, the `openfhe` package is not importable here.")
+        print(f"    ({_OPENFHE_WHY})")
+        print("    OpenFHE ships a native extension and has no universal wheel; install it to")
+        print("    reproduce the OpenFHE column, including the attested keyswitch invariant.")
+        print("    Vendor B below needs nothing beyond numpy and cryptography.")
+
+    b = certify("Vendor B — SoftwareCKKS (independent impl)", "software", server)
     open(os.path.join(EX, "crossvendor_software_cert.json"), "w").write(b.to_json())
 
-    assert a.is_pass and b.is_pass and a.verify() and b.verify()
-    assert any(i["name"] == "keyswitch_rotation" and i["passed"] for i in a.invariants)
+    assert b.is_pass and b.verify()
+    if a is not None:
+        assert a.is_pass and a.verify()
+        assert any(i["name"] == "keyswitch_rotation" and i["passed"] for i in a.invariants)
+
     print("\n---------------------------------------------")
-    print("OK: two INDEPENDENT CKKS implementations certified by ONE oracle-free suite — including")
-    print("    attested KEYSWITCH on the production library — both PASS, both signed. A third engine")
-    print("    (GLIDE on an A100 GPU) was certified separately. This is the cross-vendor correctness")
-    print("    result no single-vendor benchmark can make. Certs saved to examples/crossvendor_*.json.")
+    if a is not None:
+        print("OK: two independently-written CKKS implementations certified by ONE oracle-free suite,")
+        print("    including attested KEYSWITCH on the production library — both PASS, both signed.")
+        print("    Certs saved to examples/crossvendor_*.json.")
+    else:
+        print("OK: SoftwareCKKS certified by the oracle-free suite and signed. The cross-vendor")
+        print("    claim needs both vendors, so it is NOT established by this run — install openfhe")
+        print("    and re-run. Cert saved to examples/crossvendor_software_cert.json.")

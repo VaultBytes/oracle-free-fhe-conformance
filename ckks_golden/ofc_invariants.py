@@ -85,7 +85,7 @@ what to implement and the suite knows what is missing rather than guessing:
                      exactly where the 2k+1 bug lived (the host derived the exponent; the
                      chip applied sigma_g faithfully; both agreed and both were wrong).
 
-Run:  python3 -m ckks_golden.ofc_invariants      (from runtime/vbfhe/)
+Run:  python3 -m ckks_golden.ofc_invariants      (from the repository root)
 """
 from __future__ import annotations
 
@@ -287,7 +287,7 @@ def _slot_vector(n_slots: int, seeds: int) -> list[complex]:
     """Slot values with pairwise-distinct magnitudes AND pairwise-distinct arguments,
     none real and none the conjugate of another, so that a permutation and a conjugation
     are both identifiable from the decoded vector alone (the same construction
-    rotation_check.py uses). The phase offset is stirred by the round seed."""
+    the rotation cross-check (not included) uses). The phase offset is stirred by the round seed."""
     import math
     off = 0.3 + (seeds % 977) / 977.0
     out = []

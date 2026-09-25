@@ -23,7 +23,7 @@ affine function of k. b must be admissible:
 
 b = 5 is admissible for every N = 2^m with m >= 2 and is what HEAAN, OpenFHE and
 Lattigo use; SEAL uses b = 3. This repo uses 5 throughout -- see
-ckks_rtl/tools/gen_cts_staged_golden.py (GEN = 5, rotGroup_L[j] = 5^j mod 4L).
+the RTL staged-golden generator (not included) (GEN = 5, rotGroup_L[j] = 5^j mod 4L).
 
     rotation by k slots  ==  sigma_g  with  g = pow(b, k, 2*N)          (b = 5 here)
     conjugation          ==  sigma_g  with  g = 2N-1
@@ -33,8 +33,8 @@ has no relation to k, and for half of all k it additionally carries conjugation.
 docstring previously asserted the opposite; the claim is false and was propagated into
 the BSGS rotation-key exporter. Measured at N=256/1024/4096/16384 (25/25 compositions
 wrong), e.g. at N=1024: g=3 is conj . rot(+163), not rot(+1); g=5 is rot(+1), not
-rot(+2); g=9 is rot(+326), not rot(+4). Run `python3 -m ckks_golden.rotation_check`
-from runtime/vbfhe/ for the full adjudication table.
+rot(+2); g=9 is rot(+326), not rot(+4). The rotation cross-check is not included in this distribution
+from the repository root for the full adjudication table.
 
 The op implemented below is independent of packing -- it is a pure coefficient
 permutation, which is exactly what makes it cleanly certifiable. The packing only

@@ -50,7 +50,7 @@ def _import_noise_model():
     here = os.path.dirname(os.path.abspath(__file__))
     vbfhe = os.path.abspath(os.path.join(here, ".."))
     if vbfhe not in sys.path:
-        sys.path.insert(0, vbfhe)
+        sys.path.append(vbfhe)                    # APPEND, never insert(0, ...)
     from ckks_golden import noise_model            # type: ignore
     return noise_model
 
@@ -74,12 +74,16 @@ def derive_floors(be=None, tolerance: float = CONFORMANCE_TOLERANCE_BITS, *, N=N
             "keyswitch_rotation":    nm.encode_bits(N, sb, mode="worst"),
         }
         source = "ckks_golden.noise_model(worst)-tol"
-    except Exception:
-        # Fallback: derive from scale_bits directly (still parameter-driven, not hand-picked per run).
-        base = sb - math.log2(max(2, N) / 2.0)
-        ceil = {"add_homomorphism": base, "plainmul_distributive": base - 1.0,
-                "ctmul_distributive": base - 1.0, "keyswitch_rotation": base}
-        source = "scale_bits-derived-tol"
+    except Exception as e:
+        # REFUSE. This used to fall back to a scale_bits-derived ceiling, which was LAXER than the
+        # noise-theoretic one (6.0/5.0/5.0 instead of 6.0/6.0/6.0 at N=256, scale 22). A conformance
+        # authority that cannot derive its own acceptance threshold has nothing to certify against,
+        # and silently substituting a different threshold means the certificate's floor_source field
+        # describes a computation that did not happen. An absent dependency must refuse, not degrade.
+        raise RuntimeError(
+            f"cannot derive precision floors: the ckks_golden noise model is unavailable "
+            f"({type(e).__name__}: {e}). Floors are the basis of every verdict this authority "
+            f"issues; refusing rather than substituting a fallback threshold.") from e
     floors = {k: round(max(1.0, v - tolerance), 2) for k, v in ceil.items()}
     floors["add_commutative"] = None                              # blind / exact
     ceil = {k: round(v, 2) for k, v in ceil.items()}
@@ -143,6 +147,7 @@ class Certificate:
     composition: Optional[dict]             # pipeline-composed floor (per-op pass != chain correct)
     challenge_seed: Optional[int]           # server-issued blinded challenge (anti-precompute/replay)
     adversarial_audit: Optional[dict]       # ofc_adversarial 5-axis anti-sandbag audit
+    error_coupling: Optional[dict]          # DIAGNOSTIC: does pmul error carry w*add error?
     invariants: list
     verdict: str
     manifest_sha256: str
@@ -151,6 +156,7 @@ class Certificate:
     public_key: Optional[str]
     signature: str
     attested: bool = False             # True = known-answer challenge; False = self-reported (SECURITY.md)
+    n_report: Optional[int] = None     # slots the AUTHORITY examined (was device-chosen)
 
     def to_json(self, indent=2) -> str:
         return json.dumps(asdict(self), indent=indent, sort_keys=True, default=float, allow_nan=False)
@@ -321,31 +327,78 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str) -> di
     rng = np.random.default_rng(seed)
     has_ks = "ks" in response.get("outputs", {})
     hom, pmul, cmul, ks = [], [], [], []
+    ea_all, ep_all, w_all = [], [], []
     for r in range(rounds):
         a, b, c, w = _probe_vectors(rng, S, profile)
-        hom.append(_bits(response["outputs"]["add"][r], (a + b)[:n]))
-        pmul.append(_bits(response["outputs"]["pmul"][r], (w * (a + b))[:n]))
+        exp_add, exp_pmul = (a + b)[:n], (w * (a + b))[:n]
+        got_add = np.asarray(response["outputs"]["add"][r], dtype=float)
+        got_pmul = np.asarray(response["outputs"]["pmul"][r], dtype=float)
+        hom.append(_bits(response["outputs"]["add"][r], exp_add))
+        pmul.append(_bits(response["outputs"]["pmul"][r], exp_pmul))
         cmul.append(_bits(response["outputs"]["cmul"][r], ((a + b) * c)[:n]))
+        # Error ALGEBRA, not error magnitude. `pmul` is evaluated on the very ciphertext that
+        # produced `add` (s1 = add(ea, eb); pm = rescale(mul_plain(s1, w))), so an honest engine's
+        # pmul error necessarily carries w * err_add. A respondent that fabricates each answer
+        # independently -- including one that paints noise of exactly the right magnitude -- has no
+        # such coupling. The authority already holds every term, so this costs nothing to check.
+        ea_all.append(got_add - exp_add); ep_all.append(got_pmul - exp_pmul); w_all.append(w[:n])
         if has_ks:
             k = _ks_step(seed, r)
             ks.append(_bits(response["outputs"]["ks"][r], np.roll(a, -k)[:n]))   # rotate maps to roll(-k)
-    meas = {"add_commutative": True,   # add correctness is subsumed by the known-answer add check
-            "add_homomorphism": round(float(min(hom)), 2),
+    # add_commutative is NOT emitted here. In attested mode nothing about commutativity is
+    # challenged, sent or checked -- it used to be hardcoded True and signed, so it read PASS for a
+    # respondent that ran no FHE at all AND for an engine the same certificate failed. A field that
+    # cannot fail is not evidence. Add correctness is covered by the known-answer add check.
+    meas = {"add_homomorphism": round(float(min(hom)), 2),
             "plainmul_distributive": round(float(min(pmul)), 2),
-            "ctmul_distributive": round(float(min(cmul)), 2)}
+            "ctmul_distributive": round(float(min(cmul)), 2),
+            "error_coupling_r": _error_coupling(ea_all, ep_all, w_all)}
     if has_ks:
-        meas["keyswitch_rotation"] = round(float(min(ks)), 2)   # KNOWN-ANSWER keyswitch coverage
+        meas["keyswitch_rotation"] = round(float(min(ks)), 2)   # KNOWN-ANSWER keyswitch coupling
     return meas
+
+
+def _error_coupling(err_add, err_pmul, weights) -> float:
+    """Pearson r between the reported pmul error and w * (reported add error), pooled over rounds.
+
+    An honest CKKS engine derives pmul from the add result, so this is strongly positive. An
+    independent fabricator sits at zero however carefully it matches the error MAGNITUDE. This does
+    not make the suite sound: a delegate can carry one error vector per probe and push it through
+    the plaintext circuit, which is still O(n). It raises the cost of the fabrication from matching
+    a distribution to reproducing the circuit's error algebra, and it is reported, not enforced,
+    because we have not characterised its false-refusal rate on real engines.
+    """
+    x = np.concatenate([np.asarray(w, dtype=float) * np.asarray(e, dtype=float)
+                        for w, e in zip(weights, err_add)])
+    y = np.concatenate([np.asarray(e, dtype=float) for e in err_pmul])
+    if x.size < 8 or not np.isfinite(x).all() or not np.isfinite(y).all():
+        return float("nan")
+    sx, sy = x.std(), y.std()
+    if sx == 0.0 or sy == 0.0:
+        return float("nan")
+    return round(float(np.corrcoef(x, y)[0, 1]), 4)
 
 
 def _plausible_bits(x, scale_bits) -> float:
     """Reject implausible / adversarial self-reported bit counts (inf/nan/negative, or more than the
-    scale can physically carry). A device cannot claim precision beyond scale_bits + a small margin."""
+    scale can physically carry). A device cannot claim precision beyond scale_bits + a small margin.
+
+    This REFUSES rather than clamps. It used to return min(v, ceiling), which silently rewrote an
+    impossible measurement into a passing one: a respondent answering in exact arithmetic reports
+    hundreds of bits, was clamped to scale_bits+8, and PASSED. A precision above what the declared
+    scale can carry is not a good result, it is evidence the approximate computation was not
+    performed, and the only sound response is to refuse it.
+    """
     v = float(x)
     if not math.isfinite(v) or v < 0.0:
         raise ValueError(f"implausible measurement: {x!r}")
     ceiling = float(scale_bits) + 8.0
-    return min(v, ceiling)
+    if v > ceiling:
+        raise ValueError(
+            f"implausible measurement: {v:.2f} bits exceeds the {ceiling:.1f}-bit ceiling that a "
+            f"scale of 2^{scale_bits} can carry; a correct approximate computation cannot be this "
+            f"accurate")
+    return v
 
 
 def judge_measurements(measurements: dict, floors: dict, scale_bits: int = 64) -> list[InvariantResult]:
@@ -358,8 +411,11 @@ def judge_measurements(measurements: dict, floors: dict, scale_bits: int = 64) -
             return InvariantResult(name, True, bool(measurements[name]), None, None)
         achieved = _plausible_bits(measurements[name], scale_bits); floor = floors[name]
         return InvariantResult(name, False, achieved >= floor, round(achieved, 2), floor)
-    res = [_res("add_commutative", True), _res("add_homomorphism", False),
-           _res("plainmul_distributive", False), _res("ctmul_distributive", False)]
+    res = []
+    if "add_commutative" in measurements:          # self-consistency mode only; see attested_measurements
+        res.append(_res("add_commutative", True))
+    res += [_res("add_homomorphism", False),
+            _res("plainmul_distributive", False), _res("ctmul_distributive", False)]
     if "keyswitch_rotation" in measurements:                  # attested keyswitch coverage (if supported)
         res.append(_res("keyswitch_rotation", False))
     return res
@@ -381,7 +437,7 @@ def primitive_attestation(rounds: int = 6) -> Optional[dict]:
         here = os.path.dirname(os.path.abspath(__file__))
         vbfhe = os.path.abspath(os.path.join(here, ".."))
         if vbfhe not in sys.path:
-            sys.path.insert(0, vbfhe)
+            sys.path.append(vbfhe)
         from ckks_golden.ofc_invariants import Device, certify, verdict   # type: ignore
         from ckks_golden.keyswitch import Context                         # type: ignore
         ctx = Context(N=16, L=6, alpha=3, prime_bits=60)
@@ -415,7 +471,7 @@ def adversarial_attestation(challenge_seed: int, public_seed: int = 0xABCDEF) ->
         here = os.path.dirname(os.path.abspath(__file__))
         vbfhe = os.path.abspath(os.path.join(here, ".."))
         if vbfhe not in sys.path:
-            sys.path.insert(0, vbfhe)
+            sys.path.append(vbfhe)
         from ckks_golden.ofc_adversarial import certify as adv_certify, HonestDevice  # type: ignore
         from ckks_golden.keyswitch import Context                                     # type: ignore
         ctx = Context(N=16, L=6, alpha=3, prime_bits=60)
@@ -450,7 +506,7 @@ def application_conformance(invariants, op_trace, app_tol: float = 0.99) -> Opti
         here = os.path.dirname(os.path.abspath(__file__))
         vbfhe = os.path.abspath(os.path.join(here, ".."))
         if vbfhe not in sys.path:
-            sys.path.insert(0, vbfhe)
+            sys.path.append(vbfhe)
         from ckks_golden.ofc_e2e import e2e_conformance          # type: ignore
         r = e2e_conformance(device_bits, app_tol=app_tol)
         return {"metric": "argmax-agreement", "device_bits": device_bits,
@@ -477,13 +533,18 @@ def composition_conformance(invariants, op_trace, floors) -> Optional[dict]:
     ctmul = next((i for i in invariants if i.name == "ctmul_distributive"), None)
     if ctmul is None or ctmul.achieved_bits is None:
         return None
-    chain_len = max(1, sum(1 for t in op_trace if t.get("op") in _MUL_OPS))
+    chain_len = sum(1 for t in op_trace if t.get("op") in _MUL_OPS)
+    if chain_len < 2:
+        # Nothing was composed. This used to clamp to 1 and emit conformant=true, which restated
+        # the ctmul verdict under a name that implies a pipeline result. Report not-applicable.
+        return {"chain_len": chain_len, "conformant": None,
+                "note": "no multiplicative chain in op_trace; composition not exercised"}
     floor = floors["ctmul_distributive"]
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         vbfhe = os.path.abspath(os.path.join(here, ".."))
         if vbfhe not in sys.path:
-            sys.path.insert(0, vbfhe)
+            sys.path.append(vbfhe)
         from ckks_golden.ofc_composition import composed_pass     # type: ignore
         ok, composed_bits = composed_pass(ctmul.achieved_bits, floor, chain_len)
         return {"chain_len": chain_len, "per_op_bits": round(ctmul.achieved_bits, 2),
@@ -498,7 +559,8 @@ def composition_conformance(invariants, op_trace, floors) -> Optional[dict]:
 # --------------------------------------------------------------------------------------------------
 def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, floors, ceilings,
                          floor_source, invs, result_digest, with_primitive, signer, signer_name,
-                         challenge_seed=None, with_adversarial=True, attested=False):
+                         challenge_seed=None, with_adversarial=True, attested=False, error_coupling=None,
+                         n_report=None):
     """Build + sign a Certificate from judged invariants. Shared by the local judge and the
     conformance server so both emit identical certificates (only the signer differs)."""
     prim = primitive_attestation() if with_primitive else None
@@ -507,17 +569,35 @@ def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, f
     comp = composition_conformance(invs, op_trace, floors)
     # FAIL-CLOSED: a section that is None means "not applicable" (OK); but if a section RAN and did
     # not return conformant==True (i.e. it failed OR errored to conformant==None), it must not pass.
+    # Three states, not two. A section can be ABSENT (not requested), NOT APPLICABLE (it ran and
+    # had nothing to exercise -- conformant is None with a reason and no error), or BROKEN (it tried
+    # and errored). Absent and not-applicable are fine; broken must not pass, because otherwise a
+    # missing dependency yields a signed PASS with the check silently skipped.
+    def _section_ok(sec):
+        if sec is None:
+            return True
+        if "error" in sec:
+            return False
+        return sec.get("conformant") is not False
     invariants_ok = all(i.passed for i in invs)
-    app_ok = (app is None) or (app.get("conformant") is True)
-    comp_ok = (comp is None) or (comp.get("conformant") is True)
-    verdict = "PASS" if (invariants_ok and app_ok and comp_ok) else "FAIL"
+    app_ok = _section_ok(app)
+    comp_ok = _section_ok(comp)
+    # A section that ERRORED must not be waved through. `prim` and `adv` are attestations about the
+    # reference RNS family and not about the device, so they do not decide whether the device is
+    # conformant -- but if either failed to RUN, the certificate would assert a check that never
+    # happened. That is how a missing dependency produced a signed PASS with the adversarial audit
+    # silently errored out. An absent section is fine; a broken one is not.
+    prim_ran = (prim is None) or ("error" not in prim)
+    adv_ran = (adv is None) or ("error" not in adv)
+    verdict = "PASS" if (invariants_ok and app_ok and comp_ok and prim_ran and adv_ran) else "FAIL"
     cert = Certificate(
         version=CERT_VERSION, method=OFC_METHOD, issued_at=round(time.time(), 3),
         session_id=session_id, backend=descriptor, op_trace=list(op_trace), rounds=int(rounds),
         probe_profile=profile, floor_source=floor_source, ceilings=ceilings, result_digest=result_digest,
         primitive_conformance=prim, application_conformance=app, composition=comp,
         challenge_seed=(int(challenge_seed) if challenge_seed is not None else None),
-        adversarial_audit=adv, attested=bool(attested),
+        adversarial_audit=adv, error_coupling=error_coupling, n_report=n_report,
+        attested=bool(attested),
         invariants=[asdict(i) for i in invs], verdict=verdict, manifest_sha256="",
         signer=signer_name, signature_algo=signer.algo, public_key=signer.public_key_hex, signature="")
     body = cert.canonical_bytes()

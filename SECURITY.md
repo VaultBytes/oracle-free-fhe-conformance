@@ -9,12 +9,49 @@ the measured operations of a CKKS backend are **internally algebraically consist
 commutativity; additive homomorphism; plaintext-mul and ct×ct distributivity) **at the measured
 precision**, and that the result-ciphertext digest matches. That is a real, novel, useful signal.
 
+## The delegation limit (read this first)
+
+A respondent performing no homomorphic encryption at all obtains a signed PASS from the attested
+path. `attack_delegate.py` demonstrates it: re-derive the public probes, answer in float64, paint
+Gaussian noise to any target precision, return. No ring, no ciphertext, no key.
+
+This is structural, not a bug we intend to fix. Producing CKKS's decoded output is cheaper than
+evaluating CKKS, so the dishonest respondent is also FASTER than the honest one, which inverts every
+cost, latency and throughput defence. The suite is sound against implementations that are WRONG and
+unsound against respondents that are DISHONEST. Use it as a test for error, not a test for fraud.
+
+One transcript statistic looked promising and does not survive a production library: the certificate
+reports `error_coupling`, the correlation between the reported pmul error and `w * add error`, which
+an honest engine carries structurally. Measured r = 0.958 on our own reference implementation but
+only 0.124 on OpenFHE, where a delegate painting at 47 bits scores 0.136 -- above the honest engine.
+It is reported and deliberately not enforced.
+
+## A fail-open dependency range (fixed)
+
+`requirements.txt` previously allowed numpy >= 2.0, in which `np.polynomial.polyutils.RankWarning`
+no longer exists. The adversarial audit then raised, the handler swallowed it, and the authority
+issued a signed PASS with that attestation silently absent. numpy is now pinned below 2.0 and an
+attestation section that errors now fails the verdict.
+
 ## What it does NOT prove (do not overclaim)
 1. **Not "computed correctly against the intended result."** The invariants are *self-consistency*
-   checks (they compare two of the device's own outputs). A device that is *consistently wrong* — a
-   different secret key, a constant scale factor, or a constant additive offset — passes them, because
-   the error cancels on both sides. Correctness against an external semantics (this ciphertext decrypts
-   to the intended plaintext) is **out of scope**.
+   checks (they compare two of the device's own outputs), so they are blind to a *consistently wrong*
+   device. Precisely: any affine decoder error `y -> s*y + d` cancels wherever both sides of an
+   identity apply the decoder the same number of times. `plainmul_distributive` and
+   `ctmul_distributive` decode once per side, so both the scale error `s` and the offset `d` vanish
+   there; only `add_homomorphism` is unbalanced (one decode against two), and it therefore sees `d`
+   and still not `s`. Measured at N=256: a x1.01 scale error scores 50.91 / 18.17 / 15.06 against an
+   honest 50.90 / 18.17 / 15.06, indistinguishable on every law. A +0.5 offset scores 3.66 / 18.13 /
+   15.10 — caught by add-homomorphism alone, and invisible to the other two.
+
+   An earlier version of this document said the additive offset passes because "the error cancels on
+   both sides." That is wrong: it leaves a residual `d` in add-homomorphism. The multiplicative error
+   is the one that genuinely cancels everywhere, and it is the dangerous one, because a device wrong
+   in every answer it will ever give passes every self-consistency law cleanly.
+
+   Correctness against an external semantics (this ciphertext decrypts to the intended plaintext) is
+   **out of scope** for the self-consistency mode. The attested known-answer mode addresses it, and
+   is itself bounded by `attack_delegate.py` — see README.
 2. **The remote path is not attested.** In the client→server split the device **self-reports** its
    achieved bits; nothing binds those numbers to a real execution. The server bounds them to a
    physically plausible range (`judge_measurements`), which stops the trivial `inf`/`9999` forgery, but
@@ -64,7 +101,7 @@ legacy self-report path (`RemoteConformanceService`) remains for co-located use 
 Real HSM/KMS integration (vs. a file/env key), a managed reverse proxy with **rate limiting**, an
 accredited-principal registry + cert-chain, externally-published (e.g. object-store) signed ledger
 heads, and formal FTO/threat-model sign-off. The **attested** path also currently covers the CKKS
-compute invariants; extending known-answer coverage to keyswitch/bootstrap primitives is future work.
+compute invariants; extending known-answer coverage to bootstrap is future work; keyswitch is now covered by the attested path.
 
 ## Fixes already applied (this hardening pass)
 Fail-closed verdict (an errored optional check no longer passes); `rounds>=1` guard;

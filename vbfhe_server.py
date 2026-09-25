@@ -57,8 +57,11 @@ class ConformanceServer:
         rounds = max(1, min(int(rounds), 32))
         cid = f"ch-{self._chal_counter}"; self._chal_counter += 1
         seed = secrets.randbits(63)
-        self._pending[cid] = (seed, profile, rounds)
-        return {"challenge_id": cid, "seed": seed, "profile": profile, "rounds": rounds}
+        from vbfhe_conformance import _ATTEST_N
+        n_report = _ATTEST_N                       # the AUTHORITY sets the exam size, not the examinee
+        self._pending[cid] = (seed, profile, rounds, n_report)
+        return {"challenge_id": cid, "seed": seed, "profile": profile, "rounds": rounds,
+                "n_report": n_report}
 
     def judge_attested(self, request: dict) -> str:
         """Judge a KNOWN-ANSWER attested response: verify the challenge is one we issued (single use),
@@ -68,15 +71,57 @@ class ConformanceServer:
         cid = request.get("challenge_id")
         if cid not in self._pending:
             raise KeyError("unknown or already-used challenge")
-        seed, profile, rounds = self._pending.pop(cid)          # single-use
+        seed, profile, rounds, n_issued = self._pending.pop(cid)   # single-use
         N = int(request["N"]); scale_bits = int(request["scale_bits"])
         if not (256 <= N <= (1 << 20)) or not (10 <= scale_bits <= 120):
             raise ValueError("implausible params")
+        # The AUTHORITY set the examination; the response does not get to restate it. Every one of
+        # these was previously taken from the device unvalidated, so a response of rounds=1,
+        # n_report=1 against a rounds=4, n_report=64 challenge PASSED and the certificate then
+        # recorded rounds=4 -- an assertion about a measurement nobody made. Scoring is min-over-
+        # rounds and max-over-slots, so both fields are a difficulty dial the examinee was holding.
+        resp = request["response"]
+        if int(resp.get("rounds", -1)) != int(rounds):
+            raise ValueError(
+                f"response declares rounds={resp.get('rounds')!r} but challenge {cid} issued "
+                f"rounds={rounds}")
+        if resp.get("profile") != profile:
+            raise ValueError("response profile does not match the issued challenge")
+        # n_report was a difficulty dial the examinee held: scoring is max-error-over-REPORTED
+        # slots, so shrinking it shrinks the exam. An engine wrong on 63 of 64 slots reported
+        # n_report=1 and received a signed PASS. It is now issued by the authority and checked.
+        _n = int(resp.get("n_report", 0))
+        if _n != int(n_issued):
+            raise ValueError(
+                f"response reports {_n} slot(s) but challenge {cid} issued n_report={n_issued}")
+        # outputs is keyed by operation, each holding one vector per round.
+        _outs = resp.get("outputs") or {}
+        for _op in ("add", "pmul", "cmul"):          # the three every CKKS engine must answer
+            _v = _outs.get(_op)
+            if not isinstance(_v, list) or len(_v) != int(rounds):
+                raise ValueError(
+                    f"response gives {0 if _v is None else len(_v)} round(s) for '{_op}'; "
+                    f"challenge {cid} issued {rounds}")
+            for _i, _row in enumerate(_v):
+                if not isinstance(_row, list) or len(_row) != _n:
+                    raise ValueError(
+                        f"'{_op}' round {_i} reports {0 if _row is None else len(_row)} slots, "
+                        f"not the declared n_report={_n}")
+        if "ks" in _outs and len(_outs["ks"]) != int(rounds):
+            raise ValueError("keyswitch answered for a different number of rounds than issued")
         from vbfhe_conformance import ATTESTED_KNOWN_ANSWER_MARGIN
         meas = attested_measurements(request["response"], N=N, seed=seed, profile=profile)
         tol = (4.0 if profile == "strict" else CONFORMANCE_TOLERANCE_BITS) + ATTESTED_KNOWN_ANSWER_MARGIN
         floors, ceilings, source = derive_floors(None, tol, N=N, scale_bits=scale_bits)
         invs = judge_measurements(meas, floors, scale_bits=scale_bits)
+        _r = meas.get("error_coupling_r")
+        coupling = None if _r is None else {
+            "pearson_r": _r, "pairs": int(rounds) * int(resp.get("n_report", 0)),
+            "enforced": False,
+            "meaning": "honest engines derive pmul from the add ciphertext, so this is strongly "
+                       "positive; an independent fabricator sits near zero regardless of how well "
+                       "it matches error magnitude. DIAGNOSTIC ONLY -- not gated, false-refusal "
+                       "rate on real engines is uncharacterised."}
         desc = {"scheme": request.get("scheme", "CKKS"), "backend_class": str(request["backend_class"])[:128],
                 "N": N, "slots": int(request.get("slots", N // 2)),
                 "scale_bits": scale_bits, "q_bits": int(request.get("q_bits", 0))}
@@ -85,7 +130,8 @@ class ConformanceServer:
             op_trace=list(request.get("op_trace", []))[:512], rounds=rounds, profile=profile,
             floors=floors, ceilings=ceilings, floor_source=source, invs=invs,
             result_digest=request.get("result_digest"), with_primitive=self._with_primitive,
-            signer=self._signer, signer_name=self.signer_name, challenge_seed=seed, attested=True)
+            signer=self._signer, signer_name=self.signer_name, challenge_seed=seed, attested=True,
+            error_coupling=coupling, n_report=int(n_issued))
         self.ledger.record(cert)
         return cert.to_json()
 
