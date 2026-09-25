@@ -35,7 +35,40 @@ that are **dishonest**. Those are different threat models and only the first one
 | arithmetic that misses its noise-theoretic floor | which of several correct engines answered |
 | exact arithmetic reporting impossible precision | an engine that routes conformance probes to a slow, correct path |
 
-Use it as a test for error. Do not use it as a test for fraud. If you need the second, you need
+Use it as a test for error. Do not use it as a test for fraud.
+
+## The fix: let the authority hold the key
+
+`blind_demo.py` shows the resolution, and it is a protocol change rather than a threshold.
+
+The attested protocol sends a *seed*: the device derives the probes in the clear, encrypts under
+its own key, evaluates, decrypts and returns numbers. Everything the delegate needs is handed to
+it in plaintext, and the cheapest correct answer is an O(n) plaintext computation against an
+O(l*N log N) homomorphic one. The delegate is faster than the honest engine, which is why raising
+probe volume or tightening timing makes things worse rather than better.
+
+The blind protocol inverts who holds the key. The authority builds the context, encrypts the
+probes itself, and sends ciphertexts plus the public evaluation key. The device evaluates without
+ever holding the secret and returns ciphertexts. The authority decrypts with a key it never
+shared. Measured:
+
+```
+honest blind device            PASS   16.31 / 16.67 / 12.22 bits, floor 6.0
+delegate: return an input      FAIL    0.14 / -0.29 / -0.50
+delegate: encrypt a guess      FAIL   -0.00 /  0.00 / -0.00
+delegate: float64 + noise      UNAVAILABLE -- the probes cannot be read
+```
+
+Three other problems go with it. Forging now costs about what honest evaluation costs, so the
+cost argument stops being inverted and probe volume becomes usable. The device never decrypts, so
+the approximate-decryption oracle the attested path creates on its own key does not arise. And the
+floor derives from parameters the authority chose, so a respondent can no longer declare the bar
+it will be judged against.
+
+What it does not fix: a delegate may forward the ciphertexts to a real CKKS library elsewhere. The
+certificate then says correct CKKS evaluation happened *somewhere* under the authority's
+parameters, and narrowing that to a named device is what custody or a hardware root of trust is
+for. If you need the second, you need
 verifiable FHE, a hardware root of trust, or physical custody of the device — and note that custody
 of the box is not custody of the computation, since the host driver can answer in float64 without
 ever touching the accelerator.
