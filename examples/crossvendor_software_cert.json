@@ -1,0 +1,130 @@
+{
+  "adversarial_audit": {
+    "axes": {
+      "_achieved_bits": true,
+      "_avg_ceiling": true,
+      "_claimed_bits": true,
+      "_worst_floor": true,
+      "blinded-challenge": true,
+      "measured-floor": true,
+      "precision-plausible": true,
+      "public-seed": true,
+      "stage-manifest": true
+    },
+    "challenge_seed": 1674923906,
+    "resistant": true,
+    "subject": "reference-RNS (NOT the device under test)"
+  },
+  "application_conformance": {
+    "agreement": 0.9983,
+    "app_tol": 0.99,
+    "conformant": true,
+    "device_bits": 11,
+    "metric": "argmax-agreement",
+    "note": "INDICATIVE: plaintext-quantization proxy, not an encrypted LLM run; saturates above ~14 bits (see SECURITY.md)"
+  },
+  "attested": true,
+  "backend": {
+    "N": 256,
+    "backend_class": "SoftwareCKKS",
+    "q_bits": 123,
+    "scale_bits": 22,
+    "scheme": "CKKS",
+    "slots": 128
+  },
+  "ceilings": {
+    "add_homomorphism": 15.0,
+    "ctmul_distributive": 15.0,
+    "keyswitch_rotation": 15.0,
+    "plainmul_distributive": 15.0
+  },
+  "challenge_seed": 8464226230975418242,
+  "composition": {
+    "chain_len": 1,
+    "composed_bits": 11.23,
+    "conformant": true,
+    "floor_bits": 6.0,
+    "per_op_bits": 11.23
+  },
+  "floor_source": "ckks_golden.noise_model(worst)-tol",
+  "invariants": [
+    {
+      "achieved_bits": null,
+      "blind": true,
+      "floor_bits": null,
+      "name": "add_commutative",
+      "passed": true
+    },
+    {
+      "achieved_bits": 15.35,
+      "blind": false,
+      "floor_bits": 6.0,
+      "name": "add_homomorphism",
+      "passed": true
+    },
+    {
+      "achieved_bits": 15.63,
+      "blind": false,
+      "floor_bits": 6.0,
+      "name": "plainmul_distributive",
+      "passed": true
+    },
+    {
+      "achieved_bits": 11.23,
+      "blind": false,
+      "floor_bits": 6.0,
+      "name": "ctmul_distributive",
+      "passed": true
+    }
+  ],
+  "issued_at": 1790363124.537,
+  "manifest_sha256": "507112138ce62dd0e90c9b960abed330f82680c26343b5835feec5df3ac7be56",
+  "method": "oracle-free-algebraic-invariants/v0.2",
+  "op_trace": [
+    {
+      "n": 6,
+      "op": "encrypt_vector"
+    },
+    {
+      "n": 6,
+      "op": "encrypt_vector"
+    },
+    {
+      "n": 6,
+      "op": "encrypt_vector"
+    },
+    {
+      "D": 3,
+      "O": 2,
+      "op": "matvec"
+    }
+  ],
+  "primitive_conformance": {
+    "conformant": true,
+    "invariants": {
+      "NTT diagonalizes convolution": "PASS",
+      "NTT linearity": "PASS",
+      "NTT round-trip": "PASS",
+      "automorphism conjugates slots": "PASS",
+      "automorphism group law": "PASS",
+      "automorphism homomorphism": "PASS",
+      "automorphism inverse": "PASS",
+      "automorphism rotates slots": "PASS",
+      "keyswitch identity": "PASS",
+      "modmul distributivity": "PASS"
+    },
+    "profile": "CKKS-N16-SMOKE",
+    "subject": "reference-RNS (NOT the device under test)",
+    "verdict": "CONFORMANT"
+  },
+  "probe_profile": "workload",
+  "public_key": "4ba30c40898b5a7d3e0557a1afb1928e4218e944b4c098a02063d62fea2ce4c2",
+  "result_digest": null,
+  "rounds": 4,
+  "session_id": "sess-0a59bc5d1be08fd0",
+  "signature": "b8e4413154226734355ce339e469db7d4352700d8e48d3e217b4b84f70a7a69fa518fa9050a40368568bdc930d628aeb1ff256c1082bb15848c6dbab3c537f0b",
+  "signature_algo": "ed25519",
+  "signer": "vbfhe-conformance-service/authority",
+  "verdict": "PASS",
+  "version": "vbfhe-conformance-cert/0.2"
+}
