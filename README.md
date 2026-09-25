@@ -105,7 +105,19 @@ edge cases. There is no fault-detection-probability argument.
 **The device declares the parameters that set its own floor.** `N` and `scale_bits` come from the
 request with only a range check.
 
-## Fixed in this revision
+## Fixed in the second revision
+
+The authority now issues the slot COUNT, the slot WINDOW and the rotation requirement with its
+challenge. Previously the examined slots were always `[0:64]`, a fixed public window, so an engine
+correct on 64 of 4096 slots and arbitrary on the other 4032 was certified; and `has_ks = "ks" in
+outputs` meant a wrong-rotation engine could delete one JSON key and watch the invariant vanish from
+a signed PASS. A reference attestation that FAILS now also fails the verdict, where before only one
+that ERRORED did.
+
+`attack_delegate.py` was updated to speak the new protocol and still passes. That is the point: the
+hardening closes protocol evasions and does not touch delegation.
+
+## Fixed in the first revision
 
 For anyone comparing against the first published commit: responses claiming more precision than the declared scale can carry are now refused rather than
 silently clamped to a passing value, though that edge is a hand-set sanity bound and not the

@@ -65,16 +65,16 @@ import sys
 
 import numpy as np
 
-from vbfhe_conformance import _ks_step, _probe_vectors
+from vbfhe_conformance import _ks_step, _probe_vectors, _slot_window
 from vbfhe_server import ConformanceServer
 
 N, SCALE_BITS = 8192, 40
 
 
-def delegate(server: ConformanceServer, target_bits: float | None, n_report: int = 64) -> dict:
+def delegate(server: ConformanceServer, target_bits: float | None) -> dict:
     """Answer the authority's challenge without doing any FHE at all."""
     ch = server.issue_challenge(profile="workload", rounds=4)
-    seed, rounds = ch["seed"], ch["rounds"]
+    seed, rounds, n_report = ch["seed"], ch["rounds"], ch["n_report"]
 
     probes = np.random.default_rng(seed)        # mirrors the authority's own derivation
     paint = np.random.default_rng(0xBADC0FFEE)  # separate stream, so probes stay in step
@@ -83,6 +83,10 @@ def delegate(server: ConformanceServer, target_bits: float | None, n_report: int
 
     for r in range(rounds):
         a, b, c, w = _probe_vectors(probes, slots, "workload")
+        # The authority now chooses WHICH slots it examines, and issues the count. Both are derived
+        # from the seed by public code, so the delegate simply derives them too. Binding the window
+        # stopped an engine that was correct on a fixed prefix; it does not touch delegation.
+        idx = _slot_window(seed, r, slots, n_report)
         answers = {
             "add":  a + b,
             "pmul": (a + b) * w,
@@ -90,7 +94,7 @@ def delegate(server: ConformanceServer, target_bits: float | None, n_report: int
             "ks":   np.roll(a, -_ks_step(seed, r)),
         }
         for name, vec in answers.items():
-            v = np.asarray(vec, dtype=float)[:n_report]
+            v = np.asarray(vec, dtype=float)[idx]
             if target_bits is not None:
                 e = paint.normal(0.0, 1.0, v.shape)
                 e = e / (np.max(np.abs(e)) or 1.0)
@@ -101,7 +105,7 @@ def delegate(server: ConformanceServer, target_bits: float | None, n_report: int
         "challenge_id": ch["challenge_id"], "N": N, "scale_bits": SCALE_BITS,
         "backend_class": "NotAnFHEEngineAtAll", "slots": slots,
         "response": {"attested": True, "rounds": rounds, "profile": "workload",
-                     "n_report": n_report, "outputs": out},
+                     "n_report": n_report, "rotation_supported": True, "outputs": out},
     }
     return json.loads(server.judge_attested(request))
 

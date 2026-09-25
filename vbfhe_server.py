@@ -107,8 +107,19 @@ class ConformanceServer:
                     raise ValueError(
                         f"'{_op}' round {_i} reports {0 if _row is None else len(_row)} slots, "
                         f"not the declared n_report={_n}")
-        if "ks" in _outs and len(_outs["ks"]) != int(rounds):
-            raise ValueError("keyswitch answered for a different number of rounds than issued")
+        # A device that CAN rotate must answer the rotation challenge. `has_ks = "ks" in outputs`
+        # let a wrong-rotation engine drop the key and watch the invariant vanish from a signed
+        # PASS -- the same evasion the slot count allowed, one law over.
+        _rot = resp.get("rotation_supported")
+        if _rot is None:
+            raise ValueError("response must declare rotation_supported (true or false)")
+        if _rot and "ks" not in _outs:
+            raise ValueError("response declares rotation_supported but omits the keyswitch answer")
+        if "ks" in _outs:
+            if not _rot:
+                raise ValueError("response supplies a keyswitch answer while declaring no rotation")
+            if len(_outs["ks"]) != int(rounds):
+                raise ValueError("keyswitch answered for a different number of rounds than issued")
         from vbfhe_conformance import ATTESTED_KNOWN_ANSWER_MARGIN
         meas = attested_measurements(request["response"], N=N, seed=seed, profile=profile)
         tol = (4.0 if profile == "strict" else CONFORMANCE_TOLERANCE_BITS) + ATTESTED_KNOWN_ANSWER_MARGIN

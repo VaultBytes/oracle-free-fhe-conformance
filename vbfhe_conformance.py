@@ -285,6 +285,19 @@ def probe_measure(be, rounds: int, seed: int, profile: str) -> dict:
 _ATTEST_N = 64   # slots reported per op per round (small wire; enough for a precision estimate)
 
 
+def _slot_window(seed: int, r: int, S: int, n: int):
+    """Which slots the authority examines this round, derived from ITS seed.
+
+    This used to be a hardcoded [0:n] on both sides. The examined index set was therefore fixed,
+    public and unchallenged, so an engine correct on slots 0..63 and arbitrary everywhere else was
+    certified -- 64 of 4096 slots at the headline parameters, i.e. wrong on 98.4% of its output.
+    Deriving the window from the seed costs nothing and the device cannot know it in advance.
+    """
+    if n >= S:
+        return np.arange(S)
+    return np.sort(np.random.default_rng((int(seed) << 8) ^ (r + 1)).choice(S, size=int(n), replace=False))
+
+
 def attested_response(be, seed: int, rounds: int, profile: str, n_report: int = _ATTEST_N) -> dict:
     """DEVICE side: run the server's seeded probes and return decoded outputs (throwaway probes)."""
     if rounds < 1:
@@ -298,17 +311,22 @@ def attested_response(be, seed: int, rounds: int, profile: str, n_report: int = 
         out["ks"] = []
     for r in range(rounds):
         a, b, c, w = _probe_vectors(rng, S, profile)          # server will reproduce these exactly
+        idx = _slot_window(seed, r, S, n)                     # CA-chosen slots, not always [0:n]
         ea, eb, ec = be.encrypt(be.encode(a)), be.encrypt(be.encode(b)), be.encrypt(be.encode(c))
         s1 = be.add(ea, eb)
-        out["add"].append([float(x) for x in be.decode_ct(s1, D)[:n]])
+        out["add"].append([float(x) for x in np.asarray(be.decode_ct(s1, D))[idx]])
         pm = be.rescale(be.mul_plain(s1, be.encode(w)))
-        out["pmul"].append([float(x) for x in be.decode_ct(pm, D)[:n]])
+        out["pmul"].append([float(x) for x in np.asarray(be.decode_ct(pm, D))[idx]])
         cm = be.rescale(be.mul(s1, ec))
-        out["cmul"].append([float(x) for x in be.decode_ct(cm, D)[:n]])
+        out["cmul"].append([float(x) for x in np.asarray(be.decode_ct(cm, D))[idx]])
         if has_ks:
             k = _ks_step(seed, r)                             # CA-chosen rotation amount (keyswitch)
-            out["ks"].append([float(x) for x in be.decode_ct(be.rotate(be.encrypt(be.encode(a)), k), D)[:n]])
-    return {"attested": True, "rounds": int(rounds), "profile": profile, "n_report": n, "outputs": out}
+            out["ks"].append([float(x) for x in np.asarray(be.decode_ct(be.rotate(be.encrypt(be.encode(a)), k), D))[idx]])
+    # rotation_supported is DECLARED, so a device that can rotate cannot silently drop the law:
+    # `has_ks = "ks" in outputs` meant an engine with a wrong rotation just omitted the key and the
+    # invariant vanished from a signed PASS. Declaring false is still possible, but it is recorded.
+    return {"attested": True, "rounds": int(rounds), "profile": profile, "n_report": n,
+            "rotation_supported": bool(has_ks), "outputs": out}
 
 
 def _ks_step(seed: int, r: int) -> int:
@@ -330,21 +348,22 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str) -> di
     ea_all, ep_all, w_all = [], [], []
     for r in range(rounds):
         a, b, c, w = _probe_vectors(rng, S, profile)
-        exp_add, exp_pmul = (a + b)[:n], (w * (a + b))[:n]
+        idx = _slot_window(seed, r, S, n)
+        exp_add, exp_pmul = (a + b)[idx], (w * (a + b))[idx]
         got_add = np.asarray(response["outputs"]["add"][r], dtype=float)
         got_pmul = np.asarray(response["outputs"]["pmul"][r], dtype=float)
         hom.append(_bits(response["outputs"]["add"][r], exp_add))
         pmul.append(_bits(response["outputs"]["pmul"][r], exp_pmul))
-        cmul.append(_bits(response["outputs"]["cmul"][r], ((a + b) * c)[:n]))
+        cmul.append(_bits(response["outputs"]["cmul"][r], ((a + b) * c)[idx]))
         # Error ALGEBRA, not error magnitude. `pmul` is evaluated on the very ciphertext that
         # produced `add` (s1 = add(ea, eb); pm = rescale(mul_plain(s1, w))), so an honest engine's
         # pmul error necessarily carries w * err_add. A respondent that fabricates each answer
         # independently -- including one that paints noise of exactly the right magnitude -- has no
         # such coupling. The authority already holds every term, so this costs nothing to check.
-        ea_all.append(got_add - exp_add); ep_all.append(got_pmul - exp_pmul); w_all.append(w[:n])
+        ea_all.append(got_add - exp_add); ep_all.append(got_pmul - exp_pmul); w_all.append(w[idx])
         if has_ks:
             k = _ks_step(seed, r)
-            ks.append(_bits(response["outputs"]["ks"][r], np.roll(a, -k)[:n]))   # rotate maps to roll(-k)
+            ks.append(_bits(response["outputs"]["ks"][r], np.roll(a, -k)[idx]))  # rotate maps to roll(-k)
     # add_commutative is NOT emitted here. In attested mode nothing about commutativity is
     # challenged, sent or checked -- it used to be hardcoded True and signed, so it read PASS for a
     # respondent that ran no FHE at all AND for an engine the same certificate failed. A field that
@@ -587,8 +606,8 @@ def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, f
     # conformant -- but if either failed to RUN, the certificate would assert a check that never
     # happened. That is how a missing dependency produced a signed PASS with the adversarial audit
     # silently errored out. An absent section is fine; a broken one is not.
-    prim_ran = (prim is None) or ("error" not in prim)
-    adv_ran = (adv is None) or ("error" not in adv)
+    prim_ran = (prim is None) or ("error" not in prim and prim.get("conformant") is not False)
+    adv_ran = (adv is None) or ("error" not in adv and adv.get("resistant") is not False)
     verdict = "PASS" if (invariants_ok and app_ok and comp_ok and prim_ran and adv_ran) else "FAIL"
     cert = Certificate(
         version=CERT_VERSION, method=OFC_METHOD, issued_at=round(time.time(), 3),
