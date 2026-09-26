@@ -11,7 +11,7 @@
       "public-seed": true,
       "stage-manifest": true
     },
-    "challenge_seed": 1364575553,
+    "challenge_seed": 689483899,
     "resistant": true,
     "subject": "reference-RNS (NOT the device under test)"
   },
@@ -26,8 +26,8 @@
   "attested": true,
   "backend": {
     "N": 8192,
-    "backend_class": "OpenFHEBackend",
-    "q_bits": 221,
+    "backend_class": "TenSEALBackend",
+    "q_bits": 141,
     "scale_bits": 40,
     "scheme": "CKKS",
     "slots": 4096
@@ -38,7 +38,7 @@
     "keyswitch_rotation": 28.0,
     "plainmul_distributive": 28.0
   },
-  "challenge_seed": 8307955570029479233,
+  "challenge_seed": 688110839476564091,
   "composition": {
     "chain_len": 1,
     "conformant": null,
@@ -48,41 +48,34 @@
     "enforced": false,
     "meaning": "honest engines derive pmul from the add ciphertext, so this is strongly positive; an independent fabricator sits near zero regardless of how well it matches error magnitude. DIAGNOSTIC ONLY -- not gated, false-refusal rate on real engines is uncharacterised.",
     "pairs": 256,
-    "pearson_r": 0.0418
+    "pearson_r": 0.2874
   },
   "floor_source": "ckks_golden.noise_model(worst)-tol",
   "invariants": [
     {
-      "achieved_bits": 27.26,
+      "achieved_bits": 27.87,
       "blind": false,
       "floor_bits": 19.0,
       "name": "add_homomorphism",
       "passed": true
     },
     {
-      "achieved_bits": 21.82,
+      "achieved_bits": 22.81,
       "blind": false,
       "floor_bits": 19.0,
       "name": "plainmul_distributive",
       "passed": true
     },
     {
-      "achieved_bits": 21.82,
+      "achieved_bits": 22.83,
       "blind": false,
       "floor_bits": 19.0,
       "name": "ctmul_distributive",
       "passed": true
-    },
-    {
-      "achieved_bits": 27.34,
-      "blind": false,
-      "floor_bits": 19.0,
-      "name": "keyswitch_rotation",
-      "passed": true
     }
   ],
-  "issued_at": 1790420749.635,
-  "manifest_sha256": "e286c2104e5993846754dc7f75a6f2ecf2d3964a54a3bfcc35123bab71f9a828",
+  "issued_at": 1790420760.946,
+  "manifest_sha256": "50e965e022a1f91d9cf1158bcc044e0e8a6799e46034e11c6560bff54db37ca1",
   "method": "oracle-free-algebraic-invariants/v0.2",
   "n_report": 64,
   "op_trace": [
@@ -126,8 +119,8 @@
   "public_key": "8fdd107372fd14e50a90599d05b234c9929127f98ec1f0307534e062a48c188e",
   "result_digest": null,
   "rounds": 4,
-  "session_id": "sess-3766633203dcf00b",
-  "signature": "180fc11623bfb2c16c21fa25957f005b7aec3580959473b33405a19c749bfbd9a4d67d2baddc557b1a2f098b8fd5948ee7324ff996a7b058c978ca494a0e840e",
+  "session_id": "sess-c385352b536e4cb6",
+  "signature": "a0c12a80a05b96479187e05f2f69febc4e4f22b615ae23ee2e25c31529e533e8beeb06176b9476be292203cb1005aad4be4ff532c1eb558c963a7c867c9f4106",
   "signature_algo": "ed25519",
   "signer": "vbfhe-conformance-service/authority",
   "verdict": "PASS",

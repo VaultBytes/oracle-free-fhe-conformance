@@ -70,7 +70,7 @@ parameters. Narrowing somewhere to here is what custody or a hardware root of tr
 ```
 pip install -r requirements.txt
 python3 certify_attested_demo.py     # honest engine passes, injected fault is caught
-python3 certify_crossvendor_demo.py  # one authority, two implementations
+python3 certify_crossvendor_demo.py  # one authority, three implementations
 python3 attack_delegate.py           # the attack above
 python3 blind_demo.py                # the same delegate against the blind protocol
 ```
@@ -151,8 +151,15 @@ probes derive from the authority's fresh challenge.
 ## Repository contents
 
 The conformance suite, both protocols, the authority, signing and verification, an append-only
-transparency log with revocation, two backends, and the CKKS reference oracles in `ckks_golden/`
+transparency log with revocation, three backends, and the CKKS reference oracles in `ckks_golden/`
 that the suite scores against.
+
+The three backends are deliberately not all ours. OpenFHE and TenSEAL, which wraps Microsoft SEAL,
+were written by other people. Our own `SoftwareCKKS` is scored by our own reference oracles, so it
+is the weakest of the three as evidence. TenSEAL also rescales automatically where the other two
+require an explicit call, which is the kind of legitimate variation a conformance suite must not
+mistake for an error. It exposes no rotation in its Python surface, so the suite reports no
+keyswitch invariant for it rather than scoring one zero.
 
 Not included: application cartridges, the threshold and multiparty layer, the hardware backend, and
 the chip lowering path. None is needed to reproduce anything here.

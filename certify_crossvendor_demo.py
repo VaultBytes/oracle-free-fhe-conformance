@@ -21,6 +21,14 @@ import numpy as np
 
 from vbfhe_sdk import Session
 try:
+    from vbfhe_backend_tenseal import TenSEALBackend
+    _HAVE_TENSEAL = True
+except ImportError as _te:
+    TenSEALBackend = None
+    _HAVE_TENSEAL = False
+    _TENSEAL_WHY = str(_te)
+
+try:
     from vbfhe_backend_openfhe import OpenFHEBackend
     _HAVE_OPENFHE = True
 except ImportError as _e:                      # openfhe is a heavy optional native dep
@@ -66,18 +74,30 @@ if __name__ == "__main__":
         print("    reproduce the OpenFHE column, including the attested keyswitch invariant.")
         print("    Vendor B below needs nothing beyond numpy and cryptography.")
 
-    b = certify("Vendor B — SoftwareCKKS (independent impl)", "software", server)
+    b = certify("Vendor B — SoftwareCKKS (our own reference)", "software", server)
     open(os.path.join(EX, "crossvendor_software_cert.json"), "w").write(b.to_json())
 
+    t = None
+    if _HAVE_TENSEAL:
+        t = certify("Vendor C — TenSEAL (Microsoft SEAL)", TenSEALBackend(), server)
+        open(os.path.join(EX, "crossvendor_tenseal_cert.json"), "w").write(t.to_json())
+    else:
+        print(f"\nVendor C — TenSEAL: SKIPPED, `tenseal` is not importable ({_TENSEAL_WHY}).")
+
     assert b.is_pass and b.verify()
+    if t is not None:
+        assert t.is_pass and t.verify()
     if a is not None:
         assert a.is_pass and a.verify()
         assert any(i["name"] == "keyswitch_rotation" and i["passed"] for i in a.invariants)
 
     print("\n---------------------------------------------")
     if a is not None:
-        print("OK: two independently-written CKKS implementations certified by ONE oracle-free suite,")
-        print("    including attested KEYSWITCH on the production library — both PASS, both signed.")
+        n = 2 + (1 if t is not None else 0)
+        print(f"OK: {n} CKKS implementations certified by ONE oracle-free suite, including attested")
+        print("    KEYSWITCH on the production library. All PASS, all signed. Two of the three were")
+        print("    written by other people, and TenSEAL rescales automatically where the other two")
+        print("    need an explicit call, so the suite is not testing its own conventions.")
         print("    Certs saved to examples/crossvendor_*.json.")
     else:
         print("OK: SoftwareCKKS certified by the oracle-free suite and signed. The cross-vendor")

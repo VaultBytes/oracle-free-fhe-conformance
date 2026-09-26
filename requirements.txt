@@ -7,3 +7,8 @@ cryptography>=41.0
 # openfhe is genuinely optional and genuinely skipped: certify_crossvendor_demo.py
 # guards the import and reports the OpenFHE vendor as SKIPPED when it is absent.
 # It has no universal wheel; without it the OpenFHE column cannot be reproduced.
+
+# tenseal is OPTIONAL. It wraps Microsoft SEAL and provides a third CKKS
+# implementation for the cross-vendor demo, written by a team other than ours
+# or OpenFHE's. Without it that vendor is reported as skipped.
+# tenseal>=0.3.16
