@@ -18,9 +18,18 @@ It takes the authority's fresh seed, re-derives the challenge probes with numpy,
 answers in float64, adds noise scaled to whatever precision it likes, and returns them. It holds no
 ring, no ciphertext and no key. It passes.
 
-The reason is not a loose threshold. Producing CKKS's decoded output costs far less than evaluating
-CKKS, so a dishonest respondent is faster than an honest one. Raising the probe volume or tightening
-a timing bound therefore punishes the honest party. Every cost-based defence runs backwards.
+The reason is not a loose threshold, and we tightened the threshold properly before saying so. The
+suite derives a two-sided band: a floor from the noise model, and an upper bound from the fact that
+encoding quantises at the scale, applied per round against that round's own dynamic range. The band
+refuses a delegate that aims too high. It cannot refuse one that aims inside it, and at N=8192,
+scale 2^40 the accepted interval is about 25 bits wide while two correct production libraries at
+identical parameters disagree by 4.2 bits. Run `band_experiment.py` for both numbers.
+
+Producing CKKS's decoded output also costs less than evaluating CKKS, so a dishonest respondent is
+cheaper than an honest one and raising the probe volume punishes the honest party. Run
+`cost_asymmetry.py`: the delegate is 240x cheaper when the authority reads 64 slots and still 6x
+cheaper at full packing against evaluation alone, because a ciphertext operation touches the whole
+ring however much of it the authority intends to read.
 
 So the attested protocol is sound against implementations that are wrong. It is not sound against
 respondents that are dishonest. Those are different threat models and only the first is ours.
@@ -30,7 +39,7 @@ respondents that are dishonest. Those are different threat models and only the f
 | a consistently wrong engine (wrong key, wrong scale) | a respondent computing the answers elsewhere |
 | a broken rotation or key-switch | a respondent computing them in plaintext and adding noise |
 | arithmetic that misses its noise-theoretic floor | which of several correct engines answered |
-| exact arithmetic reporting impossible precision | an engine that routes probes to a slow, correct path |
+| a score above what the declared scale can produce | an engine that routes probes to a slow, correct path |
 
 ## The fix is to let the authority hold the key
 
@@ -99,7 +108,7 @@ CONSISTENTLY-WRONG engine (+0.5 offset)   verdict: FAIL
 
 Precision moves by several bits between runs, because the probes are random and there is no flag to
 pin them. The reproducible claim is the verdict, not the bit count. Over 100 runs the faulted engine
-fails every time, with medians of 1.77, 1.19 and 1.25 bits, and it has been observed within one bit
+fails every time, with medians of 1.78, 1.32 and 0.76 bits, and it has been observed within one bit
 of its floor. Do not read the gap above as typical.
 
 ## Known limitations
@@ -108,11 +117,22 @@ We would rather you found these here than in a certificate.
 
 **The noise model covers encoding rounding only.** It has no fresh-encryption error, no
 relinearization noise, no rescale rounding, and no key-switching noise. `keyswitch_rotation` derives
-its ceiling from `encode_bits`, which treats key-switching as noiseless. The published floors
+its worst case from `encode_bits`, which treats key-switching as noiseless. The published floors
 therefore carry nine bits of hand-set slack, being `CONFORMANCE_TOLERANCE_BITS` 6.0 plus
 `ATTESTED_KNOWN_ANSWER_MARGIN` 3.0, and that slack absorbs the model error. Real engines measure
-several bits below the model's nominal worst case, so do not use that ceiling as an upper acceptance
-edge until the missing terms are added.
+several bits below the model's nominal worst case, which is why the slack is needed.
+
+**That worst-case number is a lower bound, not a ceiling.** It used to be written into every
+certificate under the key `ceilings`, which read as a maximum and is not one: `mode="worst"` is the
+guaranteed precision a correct implementation must meet or beat, so a correct engine exceeding it is
+expected. The field is now `worst_case_bits`, and the derived upper bound lives in `precision_band`
+(`attainable_bits`, `scale_bits + 1` absolute, carried into the score's relative units per round).
+Certificates are version 0.3 and older ones do not parse.
+
+**The upper band applies to known-answer scores only.** A self-consistency score compares two of the
+device's own outputs, whose errors cancel, so the same honest engine scores 50.76 bits there against
+14.36 on the known-answer path at N=256, scale 2^22. `judge_measurements` now takes a `mode` and
+applies the bound only where it describes the measurement.
 
 **numpy is pinned below 2.0.** `ckks_golden/bootstrap.py` uses
 `np.polynomial.polyutils.RankWarning`, which NumPy 2.0 removed. Under numpy 2 the adversarial audit

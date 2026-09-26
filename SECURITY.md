@@ -16,9 +16,18 @@ path. `attack_delegate.py` demonstrates it: re-derive the public probes, answer 
 Gaussian noise to any target precision, return. No ring, no ciphertext, no key.
 
 This is structural, not a bug we intend to fix. Producing CKKS's decoded output is cheaper than
-evaluating CKKS, so the dishonest respondent is also FASTER than the honest one, which inverts every
-cost, latency and throughput defence. The suite is sound against implementations that are WRONG and
-unsound against respondents that are DISHONEST. Use it as a test for error, not a test for fraud.
+evaluating CKKS, so the dishonest respondent is also CHEAPER than the honest one, which inverts every
+cost, latency and throughput defence. Measured in `cost_asymmetry.py`: 240x cheaper at the default
+64 examined slots, 52x at full packing, 6x at full packing against honest evaluation alone. The
+suite is sound against implementations that are WRONG and unsound against respondents that are
+DISHONEST. Use it as a test for error, not a test for fraud.
+
+The precision band has been corrected and it does not close this. The upper bound is now derived
+(`attainable_bits`) and applied per round against that round's own dynamic range, rather than
+hand-set at `scale_bits + 8`. It refuses exact arithmetic and it refuses a delegate aiming above the
+band. The accepted interval is still about 25 bits wide at N=8192, scale 2^40, and narrowing it
+below the 4.2-bit disagreement between OpenFHE and TenSEAL at identical parameters would refuse one
+of them. See `band_experiment.py`.
 
 One transcript statistic looked promising and does not survive a production library: the certificate
 reports `error_coupling`, the correlation between the reported pmul error and `w * add error`, which
