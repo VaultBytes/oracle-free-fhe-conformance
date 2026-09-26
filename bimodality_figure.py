@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the figure: the score is bimodal, the margin below the band mostly is not.
+"""Regenerate the figure: the score is bimodal, the margin below the threshold mostly is not.
 
 Run it:  python3 bimodality_figure.py [out.pdf]        (needs matplotlib)
 
@@ -8,13 +8,13 @@ law, and the separation is largest for ciphertext multiplication. That is not th
 its mind. The probe amplitude is redrawn each round from {0.5, 2.0, 6.0} and the score is relative
 to max|expected|, so the score carries a log2 of the authority's own draw.
 
-The bottom row is the same runs, plotted as the distance from the score to the top of the derived
-band for that round. The band carries the same log2 term, so the term cancels and what is left is
-closer to a property of the engine. The spread falls by a factor of two to four.
+The bottom row is the same runs, plotted as the distance from the score to the upper acceptance
+threshold for that round. The threshold carries the same log2 term, so the term cancels and what is
+left is closer to a property of the engine. The spread falls by a factor of two to four.
 
 This is the figure for the units fix, not decoration: a conformance metric whose spread is governed
-by the authority's draw is not measuring only the engine, and a band that does not carry the same
-term is not in the units of the thing it judges.
+by the authority's draw is not measuring only the engine, and a threshold that does not carry the
+same term is not in the units of the thing it judges.
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def main() -> int:
                         fontsize=8, ha="left")
         ax = axes[1][col]
         ax.hist(m, bins=40, color="0.55")
-        ax.set_xlabel("bits below the derived band top", fontsize=9)
+        ax.set_xlabel("bits below the upper threshold", fontsize=9)
         if col == 0:
             ax.set_ylabel(f"runs (of {RUNS})", fontsize=9)
         print(f"  {k:<24} score sd {s.std():5.2f}   margin sd {m.std():5.2f}   "
