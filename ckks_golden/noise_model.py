@@ -44,6 +44,31 @@ def arithmetic_ceiling_bits(N: int, scale_bits: int, depth: int, mode: str = "av
     return scale_bits - log2(depth * N / 2.0)
 
 
+def attainable_bits(scale_bits: int) -> float:
+    """Upper bound on the ABSOLUTE decoded precision any correct CKKS engine can show, in bits.
+
+    The other functions here bound precision from BELOW: encode_bits/arithmetic_ceiling_bits in
+    "worst" mode give the guaranteed precision a correct implementation must meet or beat, and a
+    device scoring under them is broken. Nothing here bounded precision from ABOVE, so a respondent
+    reporting more precision than CKKS can carry had no derived bound to fail against, and the suite
+    used a hand-set scale_bits + 8 instead.
+
+    The bound. Encoding quantises at the scale, so each coefficient's rounding error lies in
+    [-1/2, 1/2] before division by Delta, and a slot's decoded error is the canonical embedding of
+    that rounding vector plus the ciphertext's own noise, which is larger again. Pushing the maximum
+    absolute error over the examined slots below 2^-(scale_bits+1) therefore needs every one of the
+    N/2 rounding contributions to cancel, in every examined slot at once. For probes drawn from a
+    continuous distribution that has probability zero. So scale_bits + 1 is an upper bound a correct
+    engine does not reach and an exact-arithmetic respondent exceeds immediately.
+
+    It is deliberately generous. Fresh-encryption noise, rescale rounding and key-switching all add
+    error on top of encode rounding, so real engines sit far below it: at N=8192, scale 2^40, OpenFHE
+    measures about 24 bits relative against a band top near 45. The bound is there to refuse the
+    physically impossible, not to discriminate between correct engines.
+    """
+    return float(scale_bits) + 1.0
+
+
 def bootstrap_bits(K: int, degree: int, mode: str = "avg") -> float:
     """EvalMod approximation precision — DERIVED from the (degree, K) of the mod-function
     polynomial approximation (the real source of bootstrap error). Uses the same minimax/

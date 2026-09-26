@@ -23,6 +23,7 @@ import json
 
 from vbfhe_conformance import (
     derive_floors, judge_measurements, assemble_certificate, CONFORMANCE_TOLERANCE_BITS,
+    attainable_absolute_bits,
 )
 
 
@@ -121,10 +122,14 @@ class ConformanceServer:
             if len(_outs["ks"]) != int(rounds):
                 raise ValueError("keyswitch answered for a different number of rounds than issued")
         from vbfhe_conformance import ATTESTED_KNOWN_ANSWER_MARGIN
-        meas = attested_measurements(request["response"], N=N, seed=seed, profile=profile)
+        # scale_bits is what makes the upper band derivable. Without it the authority can only
+        # check that a score is finite and non-negative, which an exact-arithmetic respondent
+        # satisfies.
+        meas = attested_measurements(request["response"], N=N, seed=seed, profile=profile,
+                                     scale_bits=scale_bits)
         tol = (4.0 if profile == "strict" else CONFORMANCE_TOLERANCE_BITS) + ATTESTED_KNOWN_ANSWER_MARGIN
-        floors, ceilings, source = derive_floors(None, tol, N=N, scale_bits=scale_bits)
-        invs = judge_measurements(meas, floors, scale_bits=scale_bits)
+        floors, worst_case_bits, source = derive_floors(None, tol, N=N, scale_bits=scale_bits)
+        invs = judge_measurements(meas, floors, scale_bits=scale_bits, mode="known-answer")
         _r = meas.get("error_coupling_r")
         coupling = None if _r is None else {
             "pearson_r": _r, "pairs": int(rounds) * int(resp.get("n_report", 0)),
@@ -139,10 +144,15 @@ class ConformanceServer:
         cert = assemble_certificate(
             descriptor=desc, session_id=str(request.get("session_id", "remote"))[:128],
             op_trace=list(request.get("op_trace", []))[:512], rounds=rounds, profile=profile,
-            floors=floors, ceilings=ceilings, floor_source=source, invs=invs,
+            floors=floors, worst_case_bits=worst_case_bits, floor_source=source, invs=invs,
             result_digest=request.get("result_digest"), with_primitive=self._with_primitive,
             signer=self._signer, signer_name=self.signer_name, challenge_seed=seed, attested=True,
-            error_coupling=coupling, n_report=int(n_issued))
+            error_coupling=coupling, n_report=int(n_issued),
+            precision_band={"attainable_absolute_bits": attainable_absolute_bits(scale_bits),
+                            "per_round_top_bits": meas.get("precision_band_top"),
+                            "units": "relative to max|expected| in the examined slots, so the "
+                                     "absolute bound carries a log2 of that dynamic range",
+                            "enforced": True})
         self.ledger.record(cert)
         return cert.to_json()
 
@@ -172,15 +182,18 @@ class ConformanceServer:
             raise ValueError("implausible params (N/scale_bits out of range)")
         op_trace = list(request.get("op_trace", []))[:512]          # bound attacker-controlled trace
         tol = 4.0 if profile == "strict" else CONFORMANCE_TOLERANCE_BITS
-        floors, ceilings, source = derive_floors(None, tol, N=N, scale_bits=scale_bits)
-        invs = judge_measurements(request["measurements"], floors, scale_bits=scale_bits)
+        floors, worst_case_bits, source = derive_floors(None, tol, N=N, scale_bits=scale_bits)
+        # The legacy path receives self-consistency numbers, in which the device's errors cancel
+        # against each other, so the known-answer upper bound does not describe them.
+        invs = judge_measurements(request["measurements"], floors, scale_bits=scale_bits,
+                                  mode="self-consistency")
         desc = {"scheme": request.get("scheme", "CKKS"), "backend_class": str(request["backend_class"])[:128],
                 "N": N, "slots": int(request.get("slots", N // 2)),
                 "scale_bits": scale_bits, "q_bits": int(request.get("q_bits", 0))}
         cert = assemble_certificate(
             descriptor=desc, session_id=str(request.get("session_id", "remote"))[:128],
             op_trace=op_trace, rounds=int(request.get("rounds", 0)), profile=profile,
-            floors=floors, ceilings=ceilings, floor_source=source, invs=invs,
+            floors=floors, worst_case_bits=worst_case_bits, floor_source=source, invs=invs,
             result_digest=request.get("result_digest"), with_primitive=self._with_primitive,
             signer=self._signer, signer_name=self.signer_name, challenge_seed=secrets.randbits(31))
         self.ledger.record(cert)                        # log every issued certificate (transparency)

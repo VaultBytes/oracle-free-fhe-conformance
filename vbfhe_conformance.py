@@ -33,7 +33,7 @@ from typing import Optional
 import numpy as np
 
 OFC_METHOD = "oracle-free-algebraic-invariants/v0.2"
-CERT_VERSION = "vbfhe-conformance-cert/0.2"
+CERT_VERSION = "vbfhe-conformance-cert/0.3"   # 0.3 renames `ceilings` and adds the upper band
 CONFORMANCE_TOLERANCE_BITS = 6.0     # a conformant device must land within this many bits of the
                                      # noise-theory ceiling for each op (the "conformance slack")
 # The known-answer (attested) mode compares the device output to the CA's TRUE plaintext, so the score
@@ -59,7 +59,14 @@ def derive_floors(be=None, tolerance: float = CONFORMANCE_TOLERANCE_BITS, *, N=N
     """Precision floor (bits) each op must meet or beat, DERIVED from CKKS noise theory for the given
     (N, scale_bits). floor = worst-case theoretical ceiling − tolerance. Pass a backend `be` OR the
     params directly (the conformance server derives floors from the request descriptor, not a backend).
-    Returns (floors_dict, ceilings_dict, source)."""
+    The second element used to be called `ceilings`, which is what it was written into every
+    certificate as. It is not a ceiling. `mode="worst"` is the worst-case GUARANTEED precision of a
+    correct implementation, so it is a lower bound a correct engine must meet or beat, and a correct
+    engine exceeding it is the expected case rather than a suspicious one. Reading it as a maximum
+    is how a delegate reporting 47.9 bits came to look like it was 19.9 bits above what the same
+    certificate called physically carriable. The upper bound is `attainable_absolute_bits`.
+
+    Returns (floors_dict, worst_case_bits_dict, source)."""
     if be is not None:
         N, sb = int(be.N), int(be.scale_bits)
     else:
@@ -88,6 +95,30 @@ def derive_floors(be=None, tolerance: float = CONFORMANCE_TOLERANCE_BITS, *, N=N
     floors["add_commutative"] = None                              # blind / exact
     ceil = {k: round(v, 2) for k, v in ceil.items()}
     return floors, ceil, source
+
+
+def attainable_absolute_bits(scale_bits: int) -> float:
+    """Derived upper bound on ABSOLUTE decoded precision. Refuses if the noise model is absent."""
+    try:
+        nm = _import_noise_model()
+        return float(nm.attainable_bits(int(scale_bits)))
+    except Exception as e:                                          # noqa: BLE001
+        raise RuntimeError(
+            f"cannot derive the attainable precision bound: the ckks_golden noise model is "
+            f"unavailable ({type(e).__name__}: {e}). The upper band decides whether a response is "
+            f"physically producible at all; refusing rather than substituting a hand-set edge."
+        ) from e
+
+
+def relative_upper_bits(scale_bits: int, dyn: float) -> float:
+    """The attainable bound expressed in the units the measurement actually reports.
+
+    The score is relative to max|expected|, so the absolute bound gains log2 of that same quantity.
+    This one line is the whole of the units fix: the suite previously compared a relative score to
+    an absolute model bound and to a hand-set scale_bits + 8, and neither one was in the units of
+    the number it was judging.
+    """
+    return attainable_absolute_bits(scale_bits) + math.log2(max(float(dyn), 1e-300))
 
 
 # ------------------------------------------------------------------------------------------------
@@ -140,7 +171,8 @@ class Certificate:
     rounds: int
     probe_profile: str                 # "workload" (anti-sandbag) | "random"
     floor_source: str
-    ceilings: dict
+    worst_case_bits: dict           # worst-case GUARANTEED precision, a lower bound (see derive_floors)
+    precision_band: Optional[dict]  # derived upper band, per law, in the units the scores use
     result_digest: Optional[str]       # binds the cert to the exact output ciphertexts
     primitive_conformance: Optional[dict]   # optional RNS primitive-family attestation
     application_conformance: Optional[dict] # LLM-level: does the model still pick the right token?
@@ -228,12 +260,24 @@ class Certificate:
 # --------------------------------------------------------------------------------------------------
 # Oracle-free probe kernel (+#3 anti-sandbag workload profile)
 # --------------------------------------------------------------------------------------------------
-def _bits(lhs: np.ndarray, rhs: np.ndarray) -> float:
+def _bits_dyn(lhs: np.ndarray, rhs: np.ndarray) -> tuple[float, float]:
+    """Achieved bits and the dynamic range they were measured against.
+
+    The score is RELATIVE: err / max|expected|. That is the usual effective-precision number, but it
+    means the score carries a log2(max|expected|) term that belongs to the authority's probe draw and
+    not to the engine. Any bound compared against this score has to carry the same term, so the
+    caller needs the dynamic range as well as the score. Returning one without the other is how the
+    suite ended up comparing a relative measurement to an absolute model bound.
+    """
     err = float(np.max(np.abs(np.asarray(lhs) - np.asarray(rhs))))
     dyn = float(np.max(np.abs(np.asarray(rhs)))) + 1e-12
     if err <= 0:
-        return 60.0
-    return max(0.0, -math.log2(err / dyn + 1e-18))
+        return 60.0, dyn
+    return max(0.0, -math.log2(err / dyn + 1e-18)), dyn
+
+
+def _bits(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    return _bits_dyn(lhs, rhs)[0]
 
 
 def _cteq(x, y) -> bool:
@@ -364,10 +408,19 @@ def _ks_step(seed: int, r: int) -> int:
     return int(np.random.default_rng([int(seed) & 0xFFFFFFFF, r, 777]).integers(1, 9))
 
 
-def attested_measurements(response: dict, N: int, seed: int, profile: str) -> dict:
+def attested_measurements(response: dict, N: int, seed: int, profile: str,
+                          scale_bits: int | None = None) -> dict:
     """SERVER side: re-derive the probes from the seed (KNOWN answers) and score the device's decoded
     outputs against them. Returns the same measurement shape as probe_measure so judge_measurements
-    applies the floors identically — but these bits are KNOWN-ANSWER, not self-consistency."""
+    applies the floors identically — but these bits are KNOWN-ANSWER, not self-consistency.
+
+    With `scale_bits` the authority also applies the derived upper band, per round and per law. A
+    round is refused when its score exceeds what the declared scale can carry against that round's
+    own dynamic range. The band has to be per round because the score is relative and the probe
+    amplitude is redrawn each round, so a single scalar edge is either too loose for the quiet
+    rounds or too tight for the loud ones. The old hand-set edge of scale_bits + 8 was too loose for
+    every round at these parameters.
+    """
     rounds = int(response["rounds"]); n = int(response["n_report"]); S = int(N) // 2
     if response.get("profile") != profile:
         raise ValueError("attested response profile mismatch")
@@ -375,15 +428,30 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str) -> di
     has_ks = "ks" in response.get("outputs", {})
     hom, pmul, cmul, ks = [], [], [], []
     ea_all, ep_all, w_all = [], [], []
+    band_top: dict[str, list[float]] = {}
+
+    def _score(acc, law, r, got, exp):
+        """Score one law in one round, and refuse a score the parameters cannot produce."""
+        bits, dyn = _bits_dyn(got, exp)
+        if scale_bits is not None:
+            upper = relative_upper_bits(scale_bits, dyn)
+            if bits > upper:
+                raise ValueError(
+                    f"implausible measurement: {law} round {r} reports {bits:.2f} bits against a "
+                    f"dynamic range of {dyn:.3f}, and a scale of 2^{scale_bits} carries at most "
+                    f"{upper:.2f} bits there. A correct approximate computation cannot be this "
+                    f"accurate, so the response is refused rather than scored.")
+            band_top.setdefault(law, []).append(round(upper, 2))
+        acc.append(bits)
     for r in range(rounds):
         a, b, c, w = _probe_vectors(rng, S, profile)
         idx = _slot_window(seed, r, S, n)
         exp_add, exp_pmul = (a + b)[idx], (w * (a + b))[idx]
         got_add = np.asarray(response["outputs"]["add"][r], dtype=float)
         got_pmul = np.asarray(response["outputs"]["pmul"][r], dtype=float)
-        hom.append(_bits(response["outputs"]["add"][r], exp_add))
-        pmul.append(_bits(response["outputs"]["pmul"][r], exp_pmul))
-        cmul.append(_bits(response["outputs"]["cmul"][r], ((a + b) * c)[idx]))
+        _score(hom, "add_homomorphism", r, response["outputs"]["add"][r], exp_add)
+        _score(pmul, "plainmul_distributive", r, response["outputs"]["pmul"][r], exp_pmul)
+        _score(cmul, "ctmul_distributive", r, response["outputs"]["cmul"][r], ((a + b) * c)[idx])
         # Error ALGEBRA, not error magnitude. `pmul` is evaluated on the very ciphertext that
         # produced `add` (s1 = add(ea, eb); pm = rescale(mul_plain(s1, w))), so an honest engine's
         # pmul error necessarily carries w * err_add. A respondent that fabricates each answer
@@ -392,7 +460,8 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str) -> di
         ea_all.append(got_add - exp_add); ep_all.append(got_pmul - exp_pmul); w_all.append(w[idx])
         if has_ks:
             k = _ks_step(seed, r)
-            ks.append(_bits(response["outputs"]["ks"][r], np.roll(a, -k)[idx]))  # rotate maps to roll(-k)
+            _score(ks, "keyswitch_rotation", r, response["outputs"]["ks"][r],
+                   np.roll(a, -k)[idx])                              # rotate maps to roll(-k)
     # add_commutative is NOT emitted here. In attested mode nothing about commutativity is
     # challenged, sent or checked -- it used to be hardcoded True and signed, so it read PASS for a
     # respondent that ran no FHE at all AND for an engine the same certificate failed. A field that
@@ -403,6 +472,10 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str) -> di
             "error_coupling_r": _error_coupling(ea_all, ep_all, w_all)}
     if has_ks:
         meas["keyswitch_rotation"] = round(float(min(ks)), 2)   # KNOWN-ANSWER keyswitch coupling
+    if band_top:
+        # Recorded so a reader can see which band each score was judged against. A band that is
+        # applied but not published is a threshold the respondent cannot check.
+        meas["precision_band_top"] = {k: v for k, v in sorted(band_top.items())}
     return meas
 
 
@@ -427,37 +500,69 @@ def _error_coupling(err_add, err_pmul, weights) -> float:
     return round(float(np.corrcoef(x, y)[0, 1]), 4)
 
 
+# The self-report path receives a number and no probes, so it cannot know the dynamic range the
+# number was measured against and cannot derive an exact upper bound. This allowance is the widest
+# log2(max|expected|) the workload profile plausibly produces, and it is the last hand-set constant
+# in the acceptance rule. The attested path derives its band per round from probes it holds and does
+# not use this edge. A bound this loose is a reason to prefer the attested path, not a defence.
+_UNKNOWN_DYNAMIC_RANGE_BITS = 8.0
+
+
 def _plausible_bits(x, scale_bits) -> float:
     """Reject implausible / adversarial self-reported bit counts (inf/nan/negative, or more than the
-    scale can physically carry). A device cannot claim precision beyond scale_bits + a small margin.
+    scale can physically carry) on the SELF-REPORT path, where no probes are available.
 
     This REFUSES rather than clamps. It used to return min(v, ceiling), which silently rewrote an
     impossible measurement into a passing one: a respondent answering in exact arithmetic reports
-    hundreds of bits, was clamped to scale_bits+8, and PASSED. A precision above what the declared
-    scale can carry is not a good result, it is evidence the approximate computation was not
-    performed, and the only sound response is to refuse it.
+    hundreds of bits, was clamped, and PASSED. A precision above what the declared scale can carry
+    is not a good result, it is evidence the approximate computation was not performed.
+
+    The edge itself used to be scale_bits + 8, hand-set and in the wrong units. Its base is now
+    derived, and what remains hand-set is only the allowance for a dynamic range this path cannot
+    observe.
     """
     v = float(x)
     if not math.isfinite(v) or v < 0.0:
         raise ValueError(f"implausible measurement: {x!r}")
-    ceiling = float(scale_bits) + 8.0
-    if v > ceiling:
+    edge = attainable_absolute_bits(scale_bits) + _UNKNOWN_DYNAMIC_RANGE_BITS
+    if v > edge:
         raise ValueError(
-            f"implausible measurement: {v:.2f} bits exceeds the {ceiling:.1f}-bit ceiling that a "
-            f"scale of 2^{scale_bits} can carry; a correct approximate computation cannot be this "
-            f"accurate")
+            f"implausible measurement: {v:.2f} bits exceeds the {edge:.1f}-bit edge that a scale of "
+            f"2^{scale_bits} can carry even at the widest dynamic range this profile draws; a "
+            f"correct approximate computation cannot be this accurate")
     return v
 
 
-def judge_measurements(measurements: dict, floors: dict, scale_bits: int = 64) -> list[InvariantResult]:
+def judge_measurements(measurements: dict, floors: dict, scale_bits: int = 64,
+                       mode: str = "known-answer") -> list[InvariantResult]:
     """SERVER-SIDE (certification authority): apply the derived floors to the device's measurements.
     The server owns the pass/fail bar — a device cannot pick an easy floor — and rejects physically
     implausible self-reported values (see SECURITY.md: the remote path still needs device attestation
-    to bind these numbers to a real execution)."""
+    to bind these numbers to a real execution).
+
+    `mode` decides whether an upper bound applies at all, and it has to, because the two modes
+    measure different things. A known-answer score compares the device's output to a plaintext the
+    authority computed, so the error is the device's full decode error and the attainable bound
+    applies. A self-consistency score compares two of the device's OWN outputs, whose errors share
+    most of their terms and cancel, so the same honest engine scores far higher: 50.76 bits against
+    14.36 for the same run at N=256, scale 2^22. Applying the known-answer bound there refuses an
+    honest device. It was applied there, and the only reason no honest device was refused is that
+    the one caller left `scale_bits` at its default of 64, which put the edge out of reach. A bound
+    that is only harmless because it is unreachable is not a control.
+    """
+    if mode not in ("known-answer", "self-consistency"):
+        raise ValueError(f"unknown judging mode {mode!r}")
+
     def _res(name, blind):
         if blind:
             return InvariantResult(name, True, bool(measurements[name]), None, None)
-        achieved = _plausible_bits(measurements[name], scale_bits); floor = floors[name]
+        if mode == "known-answer":
+            achieved = _plausible_bits(measurements[name], scale_bits)
+        else:
+            achieved = float(measurements[name])
+            if not math.isfinite(achieved) or achieved < 0.0:
+                raise ValueError(f"implausible measurement: {measurements[name]!r}")
+        floor = floors[name]
         return InvariantResult(name, False, achieved >= floor, round(achieved, 2), floor)
     res = []
     if "add_commutative" in measurements:          # self-consistency mode only; see attested_measurements
@@ -471,7 +576,8 @@ def judge_measurements(measurements: dict, floors: dict, scale_bits: int = 64) -
 
 def run_invariants(be, rounds: int, seed: int, profile: str, floors: dict) -> list[InvariantResult]:
     """Co-located measure+judge (the LocalOracleFreeService path)."""
-    return judge_measurements(probe_measure(be, rounds, seed, profile), floors)
+    return judge_measurements(probe_measure(be, rounds, seed, profile), floors,
+                              mode="self-consistency")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -605,10 +711,10 @@ def composition_conformance(invariants, op_trace, floors) -> Optional[dict]:
 # --------------------------------------------------------------------------------------------------
 # Service interface (OPEN) + local reference judge (OPEN) + remote submit / FHETCH interop (CLOSED)
 # --------------------------------------------------------------------------------------------------
-def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, floors, ceilings,
-                         floor_source, invs, result_digest, with_primitive, signer, signer_name,
-                         challenge_seed=None, with_adversarial=True, attested=False, error_coupling=None,
-                         n_report=None):
+def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, floors,
+                         worst_case_bits, floor_source, invs, result_digest, with_primitive, signer,
+                         signer_name, challenge_seed=None, with_adversarial=True, attested=False,
+                         error_coupling=None, n_report=None, precision_band=None):
     """Build + sign a Certificate from judged invariants. Shared by the local judge and the
     conformance server so both emit identical certificates (only the signer differs)."""
     prim = primitive_attestation(challenge_seed=challenge_seed) if with_primitive else None
@@ -641,7 +747,8 @@ def assemble_certificate(*, descriptor, session_id, op_trace, rounds, profile, f
     cert = Certificate(
         version=CERT_VERSION, method=OFC_METHOD, issued_at=round(time.time(), 3),
         session_id=session_id, backend=descriptor, op_trace=list(op_trace), rounds=int(rounds),
-        probe_profile=profile, floor_source=floor_source, ceilings=ceilings, result_digest=result_digest,
+        probe_profile=profile, floor_source=floor_source, worst_case_bits=worst_case_bits,
+        precision_band=precision_band, result_digest=result_digest,
         primitive_conformance=prim, application_conformance=app, composition=comp,
         challenge_seed=(int(challenge_seed) if challenge_seed is not None else None),
         adversarial_audit=adv, error_coupling=error_coupling, n_report=n_report,
@@ -678,13 +785,14 @@ class LocalOracleFreeService(ConformanceService):
 
     def certify(self, session, op_trace, rounds=8, result_digest=None) -> Certificate:
         be = session.be
-        floors, ceilings, source = derive_floors(be, self._tol)
+        floors, worst_case_bits, source = derive_floors(be, self._tol)
         invs = run_invariants(be, rounds=rounds, seed=self._seed, profile=self._profile, floors=floors)
         desc = {"scheme": "CKKS", "backend_class": type(be).__name__, "N": int(be.N),
                 "slots": int(be.slots), "scale_bits": int(be.scale_bits), "q_bits": int(be.q.bit_length())}
         return assemble_certificate(
             descriptor=desc, session_id=session.session_id(), op_trace=op_trace, rounds=rounds,
-            profile=self._profile, floors=floors, ceilings=ceilings, floor_source=source, invs=invs,
+            profile=self._profile, floors=floors, worst_case_bits=worst_case_bits,
+            floor_source=source, invs=invs,
             result_digest=result_digest, with_primitive=self._with_primitive,
             signer=self._signer, signer_name=self.signer_name)
 
