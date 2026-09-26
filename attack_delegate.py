@@ -21,10 +21,17 @@ WHAT THE AUTHORITY DOES
     noise-theoretic floors, and issues a signed PASS.
 
 WHY THE OBVIOUS DEFENCE DOES NOT CLOSE IT
-  Answering with NO noise is refused: exact arithmetic reports more precision than the declared
-  scale can physically carry, and `_plausible_bits` rejects it. That check is real and it is why
-  the first row below fails. But it only rules out a delegate that does not bother to post-process.
-  Adding noise costs three lines and defeats it at any target precision.
+  CKKS is approximate, so an honest score should lie below an upper bound as well as above a
+  floor, and a respondent answering too accurately should be refused. The suite now derives that
+  upper bound rather than hand-setting it: the encoding quantises at the scale, so absolute error
+  below 2^-(scale_bits+1) is not producible, and because the score is relative to max|expected| the
+  bound carries a log2 of that same dynamic range. The authority holds the probes, so it computes
+  the bound per round and refuses any round above it.
+
+  That band is real and it is why the first three rows below fail. It is also the strongest form
+  of this defence, and it does not close the hole. The band has to admit every correct
+  implementation, the accepted interval at these parameters is about 25 bits wide, and the
+  delegate needs one point inside it. Lowering the target by a few bits costs nothing.
 
   Simulating CKKS noise convincingly is not hard, because CKKS decoded error is a sum of many
   independent rounding terms pushed through the canonical embedding, so it is close to Gaussian
@@ -114,10 +121,14 @@ def main() -> int:
     print(__doc__.split("WHAT THE DELEGATE DOES")[0].strip())
     print(f"\nring N={N}, scale 2^{SCALE_BITS}\n")
     passed = 0
-    for label, target in (("exact float64, no noise", None),
-                          ("+ painted noise @ 31 bits", 31.0),
-                          ("+ painted noise @ 24 bits", 24.0),
-                          ("+ painted noise @ 20 bits", 20.0)):
+    trials = (("exact float64, no noise", None),
+              ("+ painted noise @ 47.9 bits", 47.9),
+              ("+ painted noise @ 42 bits", 42.0),
+              ("+ painted noise @ 40 bits", 40.0),
+              ("+ painted noise @ 31 bits", 31.0),
+              ("+ painted noise @ 24 bits", 24.0),
+              ("+ painted noise @ 20 bits", 20.0))
+    for label, target in trials:
         try:
             cert = delegate(ConformanceServer(), target)
             bits = ", ".join(f"{i['name'].split('_')[0]} {i['achieved_bits']}"
@@ -127,11 +138,13 @@ def main() -> int:
         except Exception as exc:                                  # noqa: BLE001
             print(f"  {label:<26} -> REFUSED  {str(exc)[:70]}")
 
-    print(f"\n  {passed} of 4 delegating respondents received a signed PASS.")
+    print(f"\n  {passed} of {len(trials)} delegating respondents received a signed PASS.")
     print("  None of them performed a single homomorphic operation.")
-    print("\n  The refusal on the first row is the plausibility check doing its job: exact")
-    print("  arithmetic is more precise than the declared scale can carry. It rules out a")
-    print("  delegate that does not post-process, and nothing more.")
+    print("\n  The refusals are the derived band doing its job. It is parameter-anchored, it is")
+    print("  applied per round against that round's own dynamic range, and it refuses a score the")
+    print("  declared scale cannot produce. What it rules out is a delegate that aims too high.")
+    print("  Aiming lower costs one constant, and the band cannot be tightened past the spread")
+    print("  between two correct implementations without refusing one of them (band_experiment.py).")
     return 0
 
 
