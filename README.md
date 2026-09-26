@@ -19,11 +19,18 @@ answers in float64, adds noise scaled to whatever precision it likes, and return
 ring, no ciphertext and no key. It passes.
 
 The reason is not a loose threshold, and we tightened the threshold properly before saying so. The
-suite derives a two-sided band: a floor from the noise model, and an upper bound from the fact that
-encoding quantises at the scale, applied per round against that round's own dynamic range. The band
-refuses a delegate that aims too high. It cannot refuse one that aims inside it, and at N=8192,
-scale 2^40 the accepted interval is about 25 bits wide while two correct production libraries at
-identical parameters disagree by 4.2 bits. Run `band_experiment.py` for both numbers.
+suite applies a two-sided band: a floor from the noise model, and an upper acceptance threshold at
+`scale_bits + 1` absolute, carried into the score's relative units per round. Over 40 challenges per
+target the delegate is refused at 44 bits and above and accepted every single time at 40 bits, which
+is sixteen bits more precision than honest OpenFHE reports at the same parameters.
+
+The threshold is calibrated, not proved. `threshold_headroom.py` measures both halves of that: a
+single slot beats `scale_bits + 1` with probability 1.1e-2 at N=256 and 3.7e-4 at N=8192, so there
+is no hard bound, while the maximum over the 64 examined slots never beat it in 300 trials and real
+engines came no closer than 7.68 bits over 280 honest rounds.
+
+None of that matters to the result. Any non-empty published acceptance region is targetable, whether
+it is 25 bits wide or 0.01. Tightening the threshold changes which constant the delegate picks.
 
 Producing CKKS's decoded output also costs less than evaluating CKKS, so a dishonest respondent is
 cheaper than an honest one and raising the probe volume punishes the honest party. Run

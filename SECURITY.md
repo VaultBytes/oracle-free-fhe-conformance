@@ -22,12 +22,19 @@ cost, latency and throughput defence. Measured in `cost_asymmetry.py`: 240x chea
 suite is sound against implementations that are WRONG and unsound against respondents that are
 DISHONEST. Use it as a test for error, not a test for fraud.
 
-The precision band has been corrected and it does not close this. The upper bound is now derived
-(`attainable_bits`) and applied per round against that round's own dynamic range, rather than
-hand-set at `scale_bits + 8`. It refuses exact arithmetic and it refuses a delegate aiming above the
-band. The accepted interval is still about 25 bits wide at N=8192, scale 2^40, and narrowing it
-below the 4.2-bit disagreement between OpenFHE and TenSEAL at identical parameters would refuse one
-of them. See `band_experiment.py`.
+The precision band has been corrected and it does not close this. The upper edge
+(`acceptance_threshold_bits`) is applied per round against that round's own dynamic range rather
+than hand-set at `scale_bits + 8`, and it refuses exact arithmetic and any delegate aiming above it.
+It is an ACCEPTANCE THRESHOLD with measured headroom, not a bound on what CKKS can produce: a single
+slot beats it with probability 3.7e-4 at N=8192, and what makes it usable is that the rule reads the
+maximum over 64 examined slots, which honest engines never came within 7.68 bits of over 280 rounds
+(`threshold_headroom.py`).
+
+Tightening it does not help. Any non-empty published acceptance region is targetable whatever its
+width, and the delegate is accepted on 40 of 40 challenges at 40 bits, sixteen bits above what
+honest OpenFHE reports. Separately, OpenFHE and TenSEAL at identical parameters differ by 4.2 bits
+(`band_experiment.py`), so a single scalar precision value is not an implementation-independent CKKS
+fingerprint either.
 
 One transcript statistic looked promising and does not survive a production library: the certificate
 reports `error_coupling`, the correlation between the reported pmul error and `w * add error`, which

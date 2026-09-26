@@ -44,27 +44,36 @@ def arithmetic_ceiling_bits(N: int, scale_bits: int, depth: int, mode: str = "av
     return scale_bits - log2(depth * N / 2.0)
 
 
-def attainable_bits(scale_bits: int) -> float:
-    """Upper bound on the ABSOLUTE decoded precision any correct CKKS engine can show, in bits.
+def acceptance_threshold_bits(scale_bits: int) -> float:
+    """Upper ACCEPTANCE THRESHOLD on absolute decoded precision, in bits. Not a physical limit.
 
-    The other functions here bound precision from BELOW: encode_bits/arithmetic_ceiling_bits in
-    "worst" mode give the guaranteed precision a correct implementation must meet or beat, and a
-    device scoring under them is broken. Nothing here bounded precision from ABOVE, so a respondent
-    reporting more precision than CKKS can carry had no derived bound to fail against, and the suite
-    used a hand-set scale_bits + 8 instead.
+    The other functions here bound precision from BELOW: "worst" mode gives the guaranteed precision
+    a correct implementation must meet or beat, and a device under it is broken. Nothing bounded
+    precision from above, so a respondent reporting more precision than CKKS plausibly carries had
+    no bound to fail against, and the suite used a hand-set scale_bits + 8 instead.
 
-    The bound. Encoding quantises at the scale, so each coefficient's rounding error lies in
-    [-1/2, 1/2] before division by Delta, and a slot's decoded error is the canonical embedding of
-    that rounding vector plus the ciphertext's own noise, which is larger again. Pushing the maximum
-    absolute error over the examined slots below 2^-(scale_bits+1) therefore needs every one of the
-    N/2 rounding contributions to cancel, in every examined slot at once. For probes drawn from a
-    continuous distribution that has probability zero. So scale_bits + 1 is an upper bound a correct
-    engine does not reach and an exact-arithmetic respondent exceeds immediately.
+    This returns scale_bits + 1, and the reason is a false-reject argument rather than a proof.
+    Encoding quantises at the scale, so each coefficient's rounding error lies in [-1/2, 1/2] before
+    division by Delta, and a slot's decoded error is the canonical embedding of that rounding vector
+    plus the ciphertext's own noise. The embedding is a sum of N terms of bounded magnitude, so its
+    typical size is about sqrt(N/12), and a single slot landing below 1/2 is a partial-cancellation
+    event, NOT an exact-cancellation one. It has real probability: measured 1.1e-2 at N=256 and
+    3.7e-4 at N=8192 over rounding vectors drawn uniformly.
 
-    It is deliberately generous. Fresh-encryption noise, rescale rounding and key-switching all add
-    error on top of encode rounding, so real engines sit far below it: at N=8192, scale 2^40, OpenFHE
-    measures about 24 bits relative against a band top near 45. The bound is there to refuse the
-    physically impossible, not to discriminate between correct engines.
+    An earlier version of this docstring said such a slot required every contribution to cancel and
+    therefore had probability zero. That was wrong, and the bound it claimed does not exist.
+
+    What makes scale_bits + 1 usable is that the acceptance rule reads the MAXIMUM over the examined
+    slots, not one slot. Every examined slot must fall below the threshold at once. Over 300 trials
+    at each of N=256, 1024 and 8192 the maximum over 64 slots never did, and the best case observed
+    was 5.4 bits of error above the threshold with no ciphertext noise at all. Real engines carry
+    encryption and rescale noise on top: over 280 honest rounds across three implementations the
+    closest any came to the threshold was 7.68 bits, and none was refused.
+
+    So this is a threshold with headroom, chosen conservatively, and a respondent above it is
+    reporting precision no correct engine has been observed to reach. It is not a theorem about what
+    CKKS can produce, and the paper's negative result does not rest on it: any non-empty published
+    acceptance region is targetable whatever its edges are.
     """
     return float(scale_bits) + 1.0
 

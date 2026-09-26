@@ -23,7 +23,7 @@ import json
 
 from vbfhe_conformance import (
     derive_floors, judge_measurements, assemble_certificate, CONFORMANCE_TOLERANCE_BITS,
-    attainable_absolute_bits,
+    upper_threshold_absolute_bits,
 )
 
 
@@ -148,11 +148,14 @@ class ConformanceServer:
             result_digest=request.get("result_digest"), with_primitive=self._with_primitive,
             signer=self._signer, signer_name=self.signer_name, challenge_seed=seed, attested=True,
             error_coupling=coupling, n_report=int(n_issued),
-            precision_band={"attainable_absolute_bits": attainable_absolute_bits(scale_bits),
-                            "per_round_top_bits": meas.get("precision_band_top"),
-                            "units": "relative to max|expected| in the examined slots, so the "
-                                     "absolute bound carries a log2 of that dynamic range",
-                            "enforced": True})
+            precision_band={
+                "upper_threshold_absolute_bits": upper_threshold_absolute_bits(scale_bits),
+                "per_round_top_bits": meas.get("precision_band_top"),
+                "units": "relative to max|expected| in the examined slots, so the absolute "
+                         "threshold carries a log2 of that dynamic range",
+                "kind": "acceptance threshold with measured headroom, NOT a bound on what CKKS "
+                        "can produce; see noise_model.acceptance_threshold_bits",
+                "enforced": True})
         self.ledger.record(cert)
         return cert.to_json()
 

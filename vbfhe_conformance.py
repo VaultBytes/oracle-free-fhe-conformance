@@ -64,7 +64,8 @@ def derive_floors(be=None, tolerance: float = CONFORMANCE_TOLERANCE_BITS, *, N=N
     correct implementation, so it is a lower bound a correct engine must meet or beat, and a correct
     engine exceeding it is the expected case rather than a suspicious one. Reading it as a maximum
     is how a delegate reporting 47.9 bits came to look like it was 19.9 bits above what the same
-    certificate called physically carriable. The upper bound is `attainable_absolute_bits`.
+    certificate called physically carriable. The upper edge is `upper_threshold_absolute_bits`,
+    which is an acceptance threshold with headroom rather than a limit on what CKKS can produce.
 
     Returns (floors_dict, worst_case_bits_dict, source)."""
     if be is not None:
@@ -97,28 +98,32 @@ def derive_floors(be=None, tolerance: float = CONFORMANCE_TOLERANCE_BITS, *, N=N
     return floors, ceil, source
 
 
-def attainable_absolute_bits(scale_bits: int) -> float:
-    """Derived upper bound on ABSOLUTE decoded precision. Refuses if the noise model is absent."""
+def upper_threshold_absolute_bits(scale_bits: int) -> float:
+    """Upper ACCEPTANCE THRESHOLD on absolute decoded precision. Refuses if the model is absent.
+
+    Not a bound on what CKKS can produce. See `noise_model.acceptance_threshold_bits` for the
+    false-reject argument and the measurements behind it.
+    """
     try:
         nm = _import_noise_model()
-        return float(nm.attainable_bits(int(scale_bits)))
+        return float(nm.acceptance_threshold_bits(int(scale_bits)))
     except Exception as e:                                          # noqa: BLE001
         raise RuntimeError(
-            f"cannot derive the attainable precision bound: the ckks_golden noise model is "
-            f"unavailable ({type(e).__name__}: {e}). The upper band decides whether a response is "
-            f"physically producible at all; refusing rather than substituting a hand-set edge."
+            f"cannot derive the upper acceptance threshold: the ckks_golden noise model is "
+            f"unavailable ({type(e).__name__}: {e}). The threshold decides whether a response is "
+            f"accepted at all; refusing rather than substituting a hand-set edge."
         ) from e
 
 
 def relative_upper_bits(scale_bits: int, dyn: float) -> float:
-    """The attainable bound expressed in the units the measurement actually reports.
+    """The threshold expressed in the units the measurement actually reports.
 
-    The score is relative to max|expected|, so the absolute bound gains log2 of that same quantity.
-    This one line is the whole of the units fix: the suite previously compared a relative score to
-    an absolute model bound and to a hand-set scale_bits + 8, and neither one was in the units of
-    the number it was judging.
+    The score is relative to max|expected|, so the absolute threshold gains log2 of that same
+    quantity. This one line is the whole of the units fix: the suite previously compared a relative
+    score to an absolute model bound and to a hand-set scale_bits + 8, and neither one was in the
+    units of the number it was judging.
     """
-    return attainable_absolute_bits(scale_bits) + math.log2(max(float(dyn), 1e-300))
+    return upper_threshold_absolute_bits(scale_bits) + math.log2(max(float(dyn), 1e-300))
 
 
 # ------------------------------------------------------------------------------------------------
@@ -437,10 +442,10 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str,
             upper = relative_upper_bits(scale_bits, dyn)
             if bits > upper:
                 raise ValueError(
-                    f"implausible measurement: {law} round {r} reports {bits:.2f} bits against a "
-                    f"dynamic range of {dyn:.3f}, and a scale of 2^{scale_bits} carries at most "
-                    f"{upper:.2f} bits there. A correct approximate computation cannot be this "
-                    f"accurate, so the response is refused rather than scored.")
+                    f"above the acceptance threshold: {law} round {r} reports {bits:.2f} bits "
+                    f"against a dynamic range of {dyn:.3f}, and the threshold for a scale of "
+                    f"2^{scale_bits} is {upper:.2f} bits there. No correct engine has been observed "
+                    f"within 7.68 bits of it, so the response is refused rather than scored.")
             band_top.setdefault(law, []).append(round(upper, 2))
         acc.append(bits)
     for r in range(rounds):
@@ -524,7 +529,7 @@ def _plausible_bits(x, scale_bits) -> float:
     v = float(x)
     if not math.isfinite(v) or v < 0.0:
         raise ValueError(f"implausible measurement: {x!r}")
-    edge = attainable_absolute_bits(scale_bits) + _UNKNOWN_DYNAMIC_RANGE_BITS
+    edge = upper_threshold_absolute_bits(scale_bits) + _UNKNOWN_DYNAMIC_RANGE_BITS
     if v > edge:
         raise ValueError(
             f"implausible measurement: {v:.2f} bits exceeds the {edge:.1f}-bit edge that a scale of "

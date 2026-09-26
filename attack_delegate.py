@@ -117,34 +117,42 @@ def delegate(server: ConformanceServer, target_bits: float | None) -> dict:
     return json.loads(server.judge_attested(request))
 
 
+CHALLENGES = 40
+
+
 def main() -> int:
     print(__doc__.split("WHAT THE DELEGATE DOES")[0].strip())
-    print(f"\nring N={N}, scale 2^{SCALE_BITS}\n")
-    passed = 0
+    print(f"\nring N={N}, scale 2^{SCALE_BITS}, {CHALLENGES} independent challenges per target\n")
     trials = (("exact float64, no noise", None),
-              ("+ painted noise @ 47.9 bits", 47.9),
-              ("+ painted noise @ 42 bits", 42.0),
-              ("+ painted noise @ 40 bits", 40.0),
-              ("+ painted noise @ 31 bits", 31.0),
-              ("+ painted noise @ 24 bits", 24.0),
-              ("+ painted noise @ 20 bits", 20.0))
+              ("painted noise @ 47.9 bits", 47.9),
+              ("painted noise @ 44 bits", 44.0),
+              ("painted noise @ 42 bits", 42.0),
+              ("painted noise @ 40 bits", 40.0),
+              ("painted noise @ 31 bits", 31.0),
+              ("painted noise @ 24 bits", 24.0),
+              ("painted noise @ 20 bits", 20.0))
+    print(f"  {'respondent':<28}{'signed PASS':>12}   reason when refused")
     for label, target in trials:
-        try:
-            cert = delegate(ConformanceServer(), target)
-            bits = ", ".join(f"{i['name'].split('_')[0]} {i['achieved_bits']}"
-                             for i in cert["invariants"] if not i["blind"])
-            print(f"  {label:<26} -> {cert['verdict']:<5} signed  [{bits}]")
-            passed += cert["verdict"] == "PASS"
-        except Exception as exc:                                  # noqa: BLE001
-            print(f"  {label:<26} -> REFUSED  {str(exc)[:70]}")
+        ok, why = 0, ""
+        for _ in range(CHALLENGES):
+            try:
+                cert = delegate(ConformanceServer(), target)
+                ok += cert["verdict"] == "PASS"
+            except Exception as exc:                              # noqa: BLE001
+                why = why or str(exc).split(":")[0]
+        rate = f"{ok}/{CHALLENGES}"
+        print(f"  {label:<28}{rate:>12}   {why}")
 
-    print(f"\n  {passed} of {len(trials)} delegating respondents received a signed PASS.")
-    print("  None of them performed a single homomorphic operation.")
-    print("\n  The refusals are the derived band doing its job. It is parameter-anchored, it is")
-    print("  applied per round against that round's own dynamic range, and it refuses a score the")
-    print("  declared scale cannot produce. What it rules out is a delegate that aims too high.")
-    print("  Aiming lower costs one constant, and the band cannot be tightened past the spread")
-    print("  between two correct implementations without refusing one of them (band_experiment.py).")
+    print("\n  None of these performed a single homomorphic operation. Honest OpenFHE scores 21.8")
+    print("  to 24.2 bits at the same parameters, so the delegate accepted every time at 40 bits")
+    print("  is reporting sixteen bits more precision than the production library it is imitating.")
+    print("\n  The refusals are the upper acceptance threshold doing its job. It is derived from")
+    print("  the scale, applied per round against that round's own dynamic range, and it refuses a")
+    print("  score no correct engine has been observed to reach. The 42-bit row sits on the edge,")
+    print("  which is why it depends on the amplitude the authority happened to draw.")
+    print("\n  What the threshold rules out is a delegate that aims too high. Aiming lower costs one")
+    print("  constant. No threshold helps here whatever its value, because the accepted region is")
+    print("  published and the delegate picks a point inside it.")
     return 0
 
 

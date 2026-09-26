@@ -11,15 +11,15 @@
       "public-seed": true,
       "stage-manifest": true
     },
-    "challenge_seed": 718927866,
+    "challenge_seed": 787396538,
     "resistant": true,
     "subject": "reference-RNS (NOT the device under test)"
   },
   "application_conformance": {
-    "agreement": 0.9983,
+    "agreement": 1.0,
     "app_tol": 0.99,
     "conformant": true,
-    "device_bits": 11,
+    "device_bits": 12,
     "metric": "argmax-agreement",
     "note": "INDICATIVE: plaintext-quantization proxy, not an encrypted LLM run; saturates above ~14 bits (see SECURITY.md)"
   },
@@ -32,7 +32,7 @@
     "scheme": "CKKS",
     "slots": 128
   },
-  "challenge_seed": 7774724347961931770,
+  "challenge_seed": 8996347528881289146,
   "composition": {
     "chain_len": 1,
     "conformant": null,
@@ -42,34 +42,34 @@
     "enforced": false,
     "meaning": "honest engines derive pmul from the add ciphertext, so this is strongly positive; an independent fabricator sits near zero regardless of how well it matches error magnitude. DIAGNOSTIC ONLY -- not gated, false-refusal rate on real engines is uncharacterised.",
     "pairs": 256,
-    "pearson_r": 0.837
+    "pearson_r": 0.9215
   },
   "floor_source": "ckks_golden.noise_model(worst)-tol",
   "invariants": [
     {
-      "achieved_bits": 15.11,
+      "achieved_bits": 15.98,
       "blind": false,
       "floor_bits": 6.0,
       "name": "add_homomorphism",
       "passed": true
     },
     {
-      "achieved_bits": 13.94,
+      "achieved_bits": 15.71,
       "blind": false,
       "floor_bits": 6.0,
       "name": "plainmul_distributive",
       "passed": true
     },
     {
-      "achieved_bits": 11.45,
+      "achieved_bits": 12.89,
       "blind": false,
       "floor_bits": 6.0,
       "name": "ctmul_distributive",
       "passed": true
     }
   ],
-  "issued_at": 1790425359.283,
-  "manifest_sha256": "4fb435dc993d66c68f8e07fc3601cacdee7e768b606189a92c5256954bf976eb",
+  "issued_at": 1790427925.136,
+  "manifest_sha256": "65b5cf4a892215d1cea0183722d49ac4843d4982198c358ca85e497cfa7a72f8",
   "method": "oracle-free-algebraic-invariants/v0.2",
   "n_report": 64,
   "op_trace": [
@@ -92,29 +92,30 @@
     }
   ],
   "precision_band": {
-    "attainable_absolute_bits": 23.0,
     "enforced": true,
+    "kind": "acceptance threshold with measured headroom, NOT a bound on what CKKS can produce; see noise_model.acceptance_threshold_bits",
     "per_round_top_bits": {
       "add_homomorphism": [
-        23.36,
-        25.77,
-        24.09,
-        25.28
+        25.72,
+        25.99,
+        26.12,
+        24.06
       ],
       "ctmul_distributive": [
-        22.95,
-        27.94,
-        22.84,
-        26.96
+        27.51,
+        27.45,
+        27.46,
+        23.94
       ],
       "plainmul_distributive": [
-        22.39,
-        27.55,
-        23.39,
-        26.3
+        27.4,
+        27.54,
+        27.41,
+        23.84
       ]
     },
-    "units": "relative to max|expected| in the examined slots, so the absolute bound carries a log2 of that dynamic range"
+    "units": "relative to max|expected| in the examined slots, so the absolute threshold carries a log2 of that dynamic range",
+    "upper_threshold_absolute_bits": 23.0
   },
   "primitive_conformance": {
     "conformant": true,
@@ -135,11 +136,11 @@
     "verdict": "CONFORMANT"
   },
   "probe_profile": "workload",
-  "public_key": "8b7e0286caa47d08736b83721e32a32c6c8032633db5292432af50d505340c52",
+  "public_key": "573dc8fed2081bf8454f4933db4db93608af2d7470f6bdf8adb4755520e2e7d4",
   "result_digest": null,
   "rounds": 4,
   "session_id": "sess-0a59bc5d1be08fd0",
-  "signature": "cd9ad47d32b00948e96fb652428ff94ab470b65025bb71ca67aaef974e2c3ae2e819a8d4dca1a03fd5297d4c5c6f4e40738916855fbcd50362368f260110980a",
+  "signature": "fbada67c83fc4012ff304a10da3d317ffd01a747a03f8689b5e312a9e42dd44411fcba07a765adc4ea87c82f602a09e28fc16b5f56dd3c5103c32ad8f7c25202",
   "signature_algo": "ed25519",
   "signer": "vbfhe-conformance-service/authority",
   "verdict": "PASS",
