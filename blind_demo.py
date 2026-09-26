@@ -9,10 +9,10 @@ it.
 
 The attested protocol sends the device a SEED. The device derives the probe plaintexts from it,
 encrypts under its own key, evaluates, decrypts, and returns decoded numbers. Everything the
-delegate needs is therefore handed to it in the clear, and the cheapest correct answer is an O(n)
-plaintext computation rather than an O(ell * N log N) homomorphic one. The delegate is not merely
-indistinguishable from an honest engine, it is faster, which is why no threshold, timing bound or
-probe-volume argument recovers soundness: raising the cost stresses the honest party.
+delegate needs is therefore handed to it in the clear, and the cheapest correct answer is a
+plaintext computation over the examined slots rather than a homomorphic one. The delegate is not
+merely indistinguishable from an honest engine, it is cheaper, which is why no threshold, timing
+bound or probe-volume argument recovers soundness: raising the cost stresses the honest party.
 
 The blind protocol inverts who holds the key. The AUTHORITY builds the context, encrypts the
 probes itself, and sends ciphertexts plus the public evaluation key. The device evaluates without
@@ -22,6 +22,11 @@ shared.
 A delegate can no longer read the probe values, so it cannot compute the answers cheaply in the
 clear. It is left guessing at ciphertexts that must decrypt correctly under a key it does not
 hold, which is the assumption CKKS security already rests on.
+
+The authority is now the one decrypting ciphertexts a respondent produced, and publishing a score
+derived from those decryptions. That is a decryption interface, so the session is single-shot: an
+ephemeral key, the whole challenge issued before any feedback, exactly one response scored, and the
+key destroyed afterwards. The controls for all three run below.
 
 This does not bind the computation to a particular device. A delegate may forward the ciphertexts
 to a real CKKS library elsewhere and return what comes back, and the certificate then says that
@@ -36,8 +41,7 @@ import sys
 import numpy as np
 
 from vbfhe_backend_ckks import SoftwareCKKS
-from vbfhe_blind import (blind_evaluate, blind_evaluator, issue_blind_challenge, judge_blind,
-                         selftest_blindness)
+from vbfhe_blind import (BlindSession, blind_evaluate, blind_evaluator, selftest_blindness)
 from vbfhe_conformance import derive_floors
 
 SEED = 20260926
@@ -45,14 +49,19 @@ SEED = 20260926
 
 def main() -> int:
     print(__doc__.split("Run it:")[0].strip())
-    auth = SoftwareCKKS()
-    floors, _, _ = derive_floors(auth, 9.0)
-    ch = issue_blind_challenge(auth, seed=SEED, rounds=4, n_report=64)
+    floors, _, _ = derive_floors(SoftwareCKKS(), 9.0)
 
-    dev = blind_evaluator(auth)
-    print("\nCONTROL  the evaluator must be unable to decrypt, or the rest is decorative")
-    print(f"  secret removed and decrypt refuses : {selftest_blindness(dev)}")
-    if not selftest_blindness(dev):
+    def session(i: int) -> BlindSession:
+        """A fresh session per respondent. The key is ephemeral, so no two share one."""
+        return BlindSession(SoftwareCKKS, seed=SEED + i, rounds=4, n_report=64)
+
+    s0 = session(0)
+    dev = blind_evaluator(s0.auth)
+    print("\nCONTROLS  each of these must hold, or everything below is decorative")
+    print(f"  evaluator holds no secret and refuses to decrypt : {selftest_blindness(dev)}")
+    view_ok = s0.selftest()["device_view_hides_answers"]
+    print(f"  transmitted challenge carries no expected answers: {view_ok}")
+    if not (selftest_blindness(dev) and view_ok):
         print("  CONTROL FAILED, aborting, the comparison below would mean nothing")
         return 1
 
@@ -60,24 +69,26 @@ def main() -> int:
         return "PASS" if all(meas[k] >= floors[k] for k in meas) else "FAIL"
 
     print("\nHONEST device, evaluating blind")
-    m = judge_blind(auth, ch, blind_evaluate(dev, ch))
+    ch = s0.challenge()
+    m = s0.judge(blind_evaluate(dev, ch))
     for k, v in m.items():
         print(f"  [{'PASS' if v >= floors[k] else 'FAIL'}] {k:<24} {v:6.2f}b (floor {floors[k]})")
 
     print("\nDELEGATE, holding the ciphertexts and no key")
-    zeros = auth.encode(np.zeros(auth.slots))
-    strategies = {
-        "return an input unchanged": lambda: {
-            "blind": True, "rounds": ch["rounds"],
-            "outputs": {op: [j["ct_a"] for j in ch["work"]] for op in ("add", "pmul", "cmul")}},
-        "encrypt a guess of zero": lambda: {
-            "blind": True, "rounds": ch["rounds"],
-            "outputs": {op: [auth.encrypt(zeros) for _ in ch["work"]]
-                        for op in ("add", "pmul", "cmul")}},
-    }
-    for label, build in strategies.items():
+    for i, (label, build) in enumerate((
+            ("return an input unchanged",
+             lambda c, a: {"blind": True, "rounds": c["rounds"],
+                           "outputs": {op: [j["ct_a"] for j in c["work"]]
+                                       for op in ("add", "pmul", "cmul")}}),
+            ("encrypt a guess of zero",
+             lambda c, a: {"blind": True, "rounds": c["rounds"],
+                           "outputs": {op: [a.encrypt(a.encode(np.zeros(a.slots)))
+                                            for _ in c["work"]]
+                                       for op in ("add", "pmul", "cmul")}}))):
+        s = session(i + 1)
+        c = s.challenge()
         try:
-            mm = judge_blind(auth, ch, build())
+            mm = s.judge(build(c, s.auth))
             bits = ", ".join(f"{k.split('_')[0]} {v}" for k, v in mm.items())
             print(f"  {label:<28} {verdict(mm):<5} [{bits}]")
         except Exception as exc:                                   # noqa: BLE001
@@ -86,13 +97,32 @@ def main() -> int:
     print("      the authority wants ciphertexts, and the probe values cannot be read out of")
     print("      the ones it sent, so there is nothing to compute the answer from")
 
+    print("\nSTATE MACHINE, checked rather than described")
+    st = session(99)
+    st.challenge()
+    for label, call in (("re-issue the same challenge", lambda: st.challenge()),
+                        ("score a second response", None)):
+        if call is None:
+            st.judge(blind_evaluate(blind_evaluator(st.auth), st._record))
+            call = lambda: st.judge({"blind": True, "rounds": 4, "outputs": {}})
+        try:
+            call()
+            print(f"  {label:<30} ALLOWED   <- the session is not single-shot")
+        except PermissionError as exc:
+            print(f"  {label:<30} REFUSED   {str(exc)[:44]}")
+    print(f"  {'secret destroyed after scoring':<30} "
+          f"{'YES' if st.selftest()['key_destroyed_after_scoring'] else 'NO'}")
+
     print("\nWHAT CHANGED")
-    print("  attested : delegate answers in O(n) plaintext flops and passes; forging is CHEAPER")
-    print("             than honest evaluation, so cost and timing defences run backwards")
+    print("  attested : delegate answers in plaintext over the examined slots and passes; forging")
+    print("             is CHEAPER than honest evaluation, so cost and timing defences run")
+    print("             backwards")
     print("  blind    : forging requires ciphertexts correct under a key the forger lacks, so its")
     print("             cost is honest evaluation's cost, and probe volume becomes usable again")
     print("\n  Not fixed: forwarding the ciphertexts to a real CKKS library elsewhere. That is")
     print("  delegation to something that genuinely does CKKS, and custody is what narrows it.")
+    print("  Not proven: that the interface is safe. One non-adaptive query per ephemeral key is")
+    print("  a bound on the adversary, not a reduction to a standard notion.")
     return 0
 
 

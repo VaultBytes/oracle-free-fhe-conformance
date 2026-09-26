@@ -86,9 +86,11 @@ def selftest_blindness(dev) -> bool:
 def issue_blind_challenge(auth, seed: int, rounds: int = 4, n_report: int = 64) -> dict:
     """AUTHORITY side. Encrypt the probes under the authority's own key.
 
-    Returns the ciphertexts the device is to evaluate, the plaintext weight it multiplies by
-    (a plaintext operand is public by construction), and the bookkeeping the authority keeps to
-    itself for scoring.
+    Returns the AUTHORITY's copy of the session: the ciphertexts, the plaintext weight the device
+    multiplies by (a plaintext operand is public by construction), and the expected answers it
+    keeps to itself for scoring. `device_view` is what may be sent. Handing this whole object to
+    the device would hand it `_expect`, which is every answer in the clear, and the protocol would
+    be back to the one it replaces.
     """
     rng = np.random.default_rng(int(seed))
     S, D = auth.slots, auth.delta
@@ -106,8 +108,31 @@ def issue_blind_challenge(auth, seed: int, rounds: int = 4, n_report: int = 64) 
             "scale": D, "work": work, "_expect": expect}
 
 
+def device_view(challenge: dict) -> dict:
+    """Exactly what the authority may transmit. Everything else stays on the authority's side.
+
+    The leading underscore on `_expect` is a naming convention, not a boundary, and a convention is
+    not a protocol. This function is the boundary, and `selftest_device_view` checks it.
+    """
+    return {"rounds": challenge["rounds"], "n_report": challenge["n_report"],
+            "scale": challenge["scale"], "work": challenge["work"]}
+
+
+def selftest_device_view(challenge: dict) -> bool:
+    """True iff the transmitted object carries no plaintext the device is supposed to be blind to."""
+    view = device_view(challenge)
+    if "_expect" in view or "seed" in view:
+        return False
+    flat = repr(sorted(view.keys()))
+    return "_expect" not in flat
+
+
 def blind_evaluate(dev, challenge: dict) -> dict:
-    """DEVICE side. Evaluate foreign ciphertexts with no secret key. Returns ciphertexts."""
+    """DEVICE side. Evaluate foreign ciphertexts with no secret key. Returns ciphertexts.
+
+    Takes the device view. Passing the authority's record works too and is what a careless caller
+    would do, so the session object below never offers it.
+    """
     out = {k: [] for k in _OPS}
     for job in challenge["work"]:
         s1 = dev.add(job["ct_a"], job["ct_b"])
@@ -144,6 +169,115 @@ def judge_blind(auth, challenge: dict, response: dict) -> dict:
         meas[{"add": "add_homomorphism", "pmul": "plainmul_distributive",
               "cmul": "ctmul_distributive"}[op]] = round(float(worst), 2)
     return meas
+
+
+class BlindSession:
+    """One certification session: one ephemeral key, one challenge, one scoring, then no key.
+
+    WHY THE STATE MACHINE IS PART OF THE PROTOCOL
+
+    Moving the observable into the ciphertext domain puts the AUTHORITY in the position of
+    decrypting ciphertexts a respondent produced, and then publishing a function of those
+    decryptions as a score. That is a decryption interface, and a decryption interface that a
+    respondent can query repeatedly under one key, with feedback between queries, is the setting in
+    which approximate decryption has been shown to leak (Li and Micciancio, EUROCRYPT 2021). The
+    device never decrypting is not on its own an answer, because the authority does.
+
+    So the session is single-shot by construction rather than by convention:
+
+      * the key is EPHEMERAL, generated with the session and used for nothing else;
+      * the whole challenge is issued BEFORE any feedback, so the respondent commits to every round
+        without seeing a score for any of them;
+      * exactly one response is scored, and a second is refused rather than scored again, so there
+        is no adaptive query loop;
+      * the secret is DESTROYED when the session closes, so a later response cannot be scored under
+        the same key even by the authority itself;
+      * the score is the only thing published, and the probes are never published, so a respondent
+        cannot learn which plaintexts a decryption belonged to.
+
+    What this does NOT do. It bounds the adversary to one non-adaptive query per key, which is
+    weaker than proving the interface safe. We have not carried out a reduction to IND-CPA-D or to
+    any other standard notion, and a protocol that certifies the same device repeatedly issues one
+    such query per session. Whether many single-query sessions compose is open, and noise flooding,
+    the standard remedy, would widen the very band the verdict depends on.
+    """
+
+    def __init__(self, backend_factory, seed: int, rounds: int = 4, n_report: int = 64):
+        self.auth = backend_factory()          # fresh context AND fresh keypair, per session
+        self._record = issue_blind_challenge(self.auth, seed=seed, rounds=rounds,
+                                             n_report=n_report)
+        self._issued = False
+        self._scored = False
+        self._closed = False
+
+    @property
+    def digest(self) -> str:
+        return challenge_digest(self._record)
+
+    def challenge(self) -> dict:
+        """The transmittable challenge. Issued once, in full, before any feedback."""
+        if self._closed:
+            raise PermissionError("session is closed; its key no longer exists")
+        if self._issued:
+            raise PermissionError(
+                "challenge already issued. Re-issuing would let a respondent see a score, ask for "
+                "the same probes again and answer differently, which is the adaptive loop this "
+                "session exists to prevent.")
+        self._issued = True
+        return device_view(self._record)
+
+    def judge(self, response: dict) -> dict:
+        """Score exactly one response, then close the session and destroy the key."""
+        if self._closed:
+            raise PermissionError(
+                "session is closed. Its secret key has been destroyed, so this response cannot be "
+                "scored under the key its ciphertexts were produced for.")
+        if self._scored:
+            raise PermissionError("a response has already been scored in this session")
+        if not self._issued:
+            raise PermissionError("no challenge was issued in this session")
+        self._scored = True
+        try:
+            _validate_response_shape(self._record, response)
+            return judge_blind(self.auth, self._record, response)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        """Destroy the secret. Idempotent."""
+        if not self._closed:
+            self.auth.s = None
+            self._record["_expect"] = None
+            self._closed = True
+
+    def selftest(self) -> dict:
+        """Controls for the three properties the docstring claims, checked rather than asserted."""
+        return {"device_view_hides_answers": selftest_device_view(self._record),
+                "challenge_issued_once": self._issued,
+                "key_destroyed_after_scoring": self._closed and getattr(self.auth, "s", 1) is None}
+
+
+def _validate_response_shape(record: dict, response: dict) -> None:
+    """Refuse a malformed response before decrypting anything in it.
+
+    A respondent supplies the objects the authority is about to put through its own secret key, so
+    the authority should know what it is decrypting. This checks the structure. It cannot check that
+    a ciphertext is well formed inside, which is a property of the backend, and a backend whose
+    decryption of a malformed ciphertext is undefined is a hazard this interface inherits.
+    """
+    if not isinstance(response, dict):
+        raise ValueError("response must be a mapping")
+    if int(response.get("rounds", -1)) != int(record["rounds"]):
+        raise ValueError("response round count does not match the issued challenge")
+    outs = response.get("outputs")
+    if not isinstance(outs, dict):
+        raise ValueError("response carries no outputs mapping")
+    for op in _OPS:
+        v = outs.get(op)
+        if not isinstance(v, list) or len(v) != int(record["rounds"]):
+            raise ValueError(f"response does not answer every issued round for '{op}'")
+        if any(x is None for x in v):
+            raise ValueError(f"response contains an empty answer for '{op}'")
 
 
 def challenge_digest(challenge: dict) -> str:
