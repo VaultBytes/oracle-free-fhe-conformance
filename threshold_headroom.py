@@ -29,15 +29,21 @@ RINGS = (256, 1024, 8192)
 
 
 def encode_rounding_errors(N: int, rng, trials: int) -> np.ndarray:
-    """|sigma(e)| per slot for rounding vectors e drawn uniformly from [-1/2, 1/2]^N.
+    """Decoded slot error per slot for rounding vectors e drawn uniformly from [-1/2, 1/2]^N.
 
     Encoding is round(Delta * sigma^-1(v)), so the decoded error is sigma(e)/Delta for the rounding
-    vector e. In units of 1/Delta the error is |sigma(e)|, and the threshold at scale_bits + 1 is
-    the line |sigma(e)| = 1/2. Evaluating sigma at the primitive 2N-th roots of unity is a twist by
-    zeta^k followed by a length-N DFT.
+    vector e. In units of 1/Delta the error is that decoded value, and the threshold at
+    scale_bits + 1 is the line 1/2. Evaluating sigma at the primitive 2N-th roots of unity is a
+    twist by zeta^k followed by a length-N DFT.
+
+    Take the REAL PART, not the modulus. `decode` returns np.real(V @ c) / scale, so the quantity a
+    slot error is measured on is Re sigma(e), and |sigma(e)| is a different random variable: the
+    modulus of a 2-D Gaussian rather than one real coordinate. Using the modulus understates
+    P(|error| < 1/2) by about an order of magnitude at N = 256 and two at N = 8192, because that
+    probability is Theta(N^-1) for the modulus and Theta(N^-1/2) for the real part.
     """
     tw = np.exp(1j * np.pi * np.arange(N) / N)
-    return np.asarray([np.abs(np.fft.fft(rng.uniform(-0.5, 0.5, N) * tw)[:N // 2])
+    return np.asarray([np.abs(np.real(np.fft.fft(rng.uniform(-0.5, 0.5, N) * tw)[:N // 2]))
                        for _ in range(trials)])
 
 
@@ -96,8 +102,8 @@ def part_two() -> int:
             except ValueError:
                 refused += 1
                 continue
-            for law, tops in m["precision_band_top"].items():
-                margins.append(min(tops) - m[law])
+            for law, per_round in m["precision_margin"].items():
+                margins.extend(per_round)          # each margin is one round's, correctly paired
             total += 4
         a = np.asarray(margins)
         closest = a.min() if closest is None else min(closest, a.min())

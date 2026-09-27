@@ -434,6 +434,7 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str,
     hom, pmul, cmul, ks = [], [], [], []
     ea_all, ep_all, w_all = [], [], []
     band_top: dict[str, list[float]] = {}
+    band_margin: dict[str, list[float]] = {}
 
     def _score(acc, law, r, got, exp):
         """Score one law in one round, and refuse a score the parameters cannot produce."""
@@ -447,6 +448,10 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str,
                     f"2^{scale_bits} is {upper:.2f} bits there. No correct engine has been observed "
                     f"within 7.68 bits of it, so the response is refused rather than scored.")
             band_top.setdefault(law, []).append(round(upper, 2))
+            # The margin belongs to ONE round. Subtracting a minimum threshold from a minimum
+            # score pairs a threshold from one round with a score from another and overstates the
+            # headroom, so it is recorded here where both quantities are the same round's.
+            band_margin.setdefault(law, []).append(round(upper - bits, 2))
         acc.append(bits)
     for r in range(rounds):
         a, b, c, w = _probe_vectors(rng, S, profile)
@@ -481,6 +486,7 @@ def attested_measurements(response: dict, N: int, seed: int, profile: str,
         # Recorded so a reader can see which band each score was judged against. A band that is
         # applied but not published is a threshold the respondent cannot check.
         meas["precision_band_top"] = {k: v for k, v in sorted(band_top.items())}
+        meas["precision_margin"] = {k: v for k, v in sorted(band_margin.items())}
     return meas
 
 
