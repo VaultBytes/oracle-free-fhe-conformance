@@ -48,6 +48,8 @@ import copy
 import hashlib
 from typing import Any
 
+import secrets
+
 import numpy as np
 
 _OPS = ("add", "pmul", "cmul")
@@ -83,7 +85,8 @@ def selftest_blindness(dev) -> bool:
     return False
 
 
-def issue_blind_challenge(auth, seed: int, rounds: int = 4, n_report: int = 64) -> dict:
+def issue_blind_challenge(auth, seed: int, rounds: int = 4, n_report: int = 64,
+                          probe_secret: int = None) -> dict:
     """AUTHORITY side. Encrypt the probes under the authority's own key.
 
     Returns the AUTHORITY's copy of the session: the ciphertexts, the plaintext weight the device
@@ -92,20 +95,33 @@ def issue_blind_challenge(auth, seed: int, rounds: int = 4, n_report: int = 64) 
     the device would hand it `_expect`, which is every answer in the clear, and the protocol would
     be back to the one it replaces.
     """
-    rng = np.random.default_rng(int(seed))
+    # The probes must be secret, and `w` must not be. A plaintext operand of a plaintext-multiply
+    # law is public by construction: `pt_w` is transmitted in the clear and the device decodes it
+    # with no key at all. Drawing a, b, c and w from ONE generator therefore hands the device a
+    # block of the very stream that produced the probes it is supposed to be blind to. With a
+    # date-shaped seed that is a 4000-candidate search; with any seed it reduces to state recovery
+    # on a generator NumPy documents as non-cryptographic, not to a lattice problem.
+    #
+    # So the secret probes come from their own source, which nothing transmitted is a function of,
+    # and `seed` drives only the public weight.
+    rng_public = np.random.default_rng(int(seed))
+    probe_secret = secrets.randbits(256) if probe_secret is None else int(probe_secret)
+    rng_secret = np.random.default_rng(
+        np.random.SeedSequence(entropy=probe_secret, spawn_key=(1,)))
     S, D = auth.slots, auth.delta
     n = min(int(n_report), S)
     work, expect = [], []
     for _ in range(int(rounds)):
-        a, b, c = rng.normal(size=S), rng.normal(size=S), rng.normal(size=S)
-        w = rng.normal(size=S)
+        a, b, c = (rng_secret.normal(size=S), rng_secret.normal(size=S),
+                   rng_secret.normal(size=S))
+        w = rng_public.normal(size=S)
         work.append({"ct_a": auth.encrypt(auth.encode(a)),
                      "ct_b": auth.encrypt(auth.encode(b)),
                      "ct_c": auth.encrypt(auth.encode(c)),
                      "pt_w": auth.encode(w)})
         expect.append({"add": a + b, "pmul": w * (a + b), "cmul": (a + b) * c})
     return {"seed": int(seed), "rounds": int(rounds), "n_report": n,
-            "scale": D, "work": work, "_expect": expect}
+            "scale": D, "work": work, "_expect": expect, "_probe_secret": int(probe_secret)}
 
 
 def device_view(challenge: dict) -> dict:
@@ -121,7 +137,7 @@ def device_view(challenge: dict) -> dict:
 def selftest_device_view(challenge: dict) -> bool:
     """True iff the transmitted object carries no plaintext the device is supposed to be blind to."""
     view = device_view(challenge)
-    if "_expect" in view or "seed" in view:
+    if "_expect" in view or "seed" in view or "_probe_secret" in view:
         return False
     flat = repr(sorted(view.keys()))
     return "_expect" not in flat
@@ -202,8 +218,17 @@ class BlindSession:
     the standard remedy, would widen the very band the verdict depends on.
     """
 
-    def __init__(self, backend_factory, seed: int, rounds: int = 4, n_report: int = 64):
-        self.auth = backend_factory()          # fresh context AND fresh keypair, per session
+    def __init__(self, backend_factory, seed: int = None, rounds: int = 4, n_report: int = 64):
+        # The key must be FRESH, and "fresh" is a property of this line, not of a comment. A backend
+        # whose constructor defaults its seed hands every session the same secret, and every control
+        # below still passes, because none of them can see the key. That is the failure this suite
+        # exists to name: a field that passes while describing something other than what it means.
+        try:
+            self.auth = backend_factory(seed=secrets.randbits(63))
+        except TypeError:
+            self.auth = backend_factory()      # backend derives its own key material
+        if seed is None:
+            seed = secrets.randbits(63)        # probes are secret; a date constant is not a secret
         self._record = issue_blind_challenge(self.auth, seed=seed, rounds=rounds,
                                              n_report=n_report)
         self._issued = False
@@ -254,7 +279,25 @@ class BlindSession:
         """Controls for the three properties the docstring claims, checked rather than asserted."""
         return {"device_view_hides_answers": selftest_device_view(self._record),
                 "challenge_issued_once": self._issued,
-                "key_destroyed_after_scoring": self._closed and getattr(self.auth, "s", 1) is None}
+                "key_destroyed_after_scoring": self._closed and getattr(self.auth, "s", 1) is None,
+                "authority_key_is_fresh": self._key_is_fresh()}
+
+    @staticmethod
+    def _key_is_fresh(_factory=None) -> bool:
+        """A control that CAN fail: two sessions must not share an authority secret.
+
+        Without this the blindness of the protocol rests on a backend's default argument. A
+        respondent that can reconstruct the authority's key reads the probes out of the challenge
+        and answers without evaluating anything, which is the attack this protocol exists to make
+        unavailable.
+        """
+        import numpy as _np
+        from vbfhe_backend_ckks import SoftwareCKKS as _B
+        a, b = BlindSession(_B, rounds=1, n_report=8), BlindSession(_B, rounds=1, n_report=8)
+        sa, sb = getattr(a.auth, "s", None), getattr(b.auth, "s", None)
+        if sa is None or sb is None:
+            return False
+        return not bool(_np.array_equal(sa, sb))
 
 
 def _validate_response_shape(record: dict, response: dict) -> None:

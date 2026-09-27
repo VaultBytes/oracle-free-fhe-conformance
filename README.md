@@ -62,8 +62,8 @@ sends ciphertexts with the public evaluation key. The device evaluates without e
 secret and returns ciphertexts. The authority decrypts with a key it never shared.
 
 ```
-honest blind device            PASS   16.31 / 16.67 / 12.22 bits, floor 6.0
-delegate, returns an input     FAIL    0.14 / -0.29 / -0.50
+honest blind device            PASS   16.42 / 16.01 / 13.97 bits, floor 6.0
+delegate, returns an input     FAIL    0.26 / -0.48 / -0.52
 delegate, encrypts a guess     FAIL   -0.00 /  0.00 / -0.00
 delegate, float64 plus noise   UNAVAILABLE
 ```
