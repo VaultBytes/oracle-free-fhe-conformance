@@ -143,9 +143,10 @@ def main() -> int:
         rate = f"{ok}/{CHALLENGES}"
         print(f"  {label:<28}{rate:>12}   {why}")
 
-    print("\n  None of these performed a single homomorphic operation. Honest OpenFHE scores 21.8")
-    print("  to 24.2 bits at the same parameters, so the delegate accepted every time at 40 bits")
-    print("  is reporting sixteen bits more precision than the production library it is imitating.")
+    print("\n  None of these performed a single homomorphic operation. Honest OpenFHE scores")
+    print("  between 21.6 and 25.9 bits at these parameters across observed runs, so the delegate")
+    print("  accepted every time at 40 bits reports fourteen bits more precision than the best the")
+    print("  production library it imitates managed, and more than any run of it we recorded.")
     print("\n  The refusals are the upper acceptance threshold doing its job. It is derived from")
     print("  the scale, applied per round against that round's own dynamic range, and it refuses a")
     print("  score no correct engine has been observed to reach. The 42-bit row sits on the edge,")

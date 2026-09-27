@@ -51,6 +51,8 @@ def main() -> int:
     print(__doc__.split("Run it:")[0].strip())
     floors, _, _ = derive_floors(SoftwareCKKS(), 9.0)
 
+    _own = SoftwareCKKS()          # the delegate's own context: no access to the authority's key
+
     def session(i: int) -> BlindSession:
         """A fresh session per respondent. The key is ephemeral, so no two share one."""
         return BlindSession(SoftwareCKKS, seed=SEED + i, rounds=4, n_report=64)
@@ -81,8 +83,12 @@ def main() -> int:
                            "outputs": {op: [j["ct_a"] for j in c["work"]]
                                        for op in ("add", "pmul", "cmul")}}),
             ("encrypt a guess of zero",
+             # NOT `a`. Handing the delegate the authority's backend hands it the authority's
+             # secret, and a delegate that holds the key is not the adversary this protocol is
+             # about. It encrypts under its OWN context, which is what a respondent can actually
+             # do, and the authority then cannot decrypt the result at all.
              lambda c, a: {"blind": True, "rounds": c["rounds"],
-                           "outputs": {op: [a.encrypt(a.encode(np.zeros(a.slots)))
+                           "outputs": {op: [_own.encrypt(_own.encode(np.zeros(_own.slots)))
                                             for _ in c["work"]]
                                        for op in ("add", "pmul", "cmul")}}))):
         s = session(i + 1)
