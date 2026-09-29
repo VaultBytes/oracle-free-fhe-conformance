@@ -1,0 +1,207 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={What a Metamorphic Relation Can and Cannot See in an FHE Decoder},
+            pdfauthor={Bader Alissaei},
+            pdfsubject={Fully homomorphic encryption, metamorphic testing},
+            pdfkeywords={CKKS, FHE, metamorphic testing, conformance, decoder}}
+\usepackage{microtype}
+
+\title{What a Metamorphic Relation Can and Cannot See in an FHE Decoder\\[2mm]
+\large A degree criterion for scale errors, and why three laws missed one}
+
+\author{Bader Alissaei\\ \small VaultBytes Innovations Ltd\\ \small \texttt{b@vaultbytes.com}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Metamorphic and relational testing checks an implementation against identities its outputs should
+satisfy, which is attractive for fully homomorphic encryption because it needs no reference
+implementation and no trusted golden vectors. We give a criterion for what such a test can see. A
+relation assembled from device decodes is blind to a multiplicative decoder error exactly when it is
+invariant under $D \mapsto sD$, and it is blind to an additive one exactly when its coefficients sum
+to zero. The two conditions are independent, and a suite can satisfy both without anyone noticing,
+because neither is visible in the identities as usually written. We apply the criterion to a CKKS
+conformance suite of our own and find that all three of its laws are blind to a scale error, so a
+decoder scaled by $1.01$ passes with a higher score than an honest one. The repair needs no oracle:
+the multiplicative homomorphism mixes degrees in $D$ and its residual is $s(1-s)D(ab)$, which we
+measure. We also show that sensitivity is not refusal. At the floor our own reference runs at, that
+law scores $6.66$ bits against a floor of $6.0$ and still returns a pass.
+\end{abstract}
+
+\section{The question}
+
+A test that needs no reference implementation is worth having. For fully homomorphic encryption it
+is worth more than usual, because a reference implementation presumes both a trusted party and a
+trusted channel, which is the third party an accelerator buyer is trying to avoid, and because a
+check that decrypts user data defeats the point of the scheme. So relational testing is the natural
+design, and recent work takes it: Eidolon fuzzes FHE libraries with noise-aware mutation over
+equivalent arithmetic expressions~\cite{eidolon}, and HERTA applies metamorphic relations derived
+from FHE semantics across the software stack and reports 21 previously unknown
+bugs~\cite{herta}.
+
+The question this note answers is narrow. Given a suite of such relations, which faults can it see?
+We answer it for the decoder, which is where an FHE implementation turns ring elements back into
+numbers and where an error is both easy to introduce and consequential in every answer the engine
+will ever give.
+
+\section{The criterion}
+
+Write $D$ for the decoder a correct implementation realises and $D'$ for the one a faulty engine
+realises. Take the faulty decoder to be affine,
+\[
+D'(x) = s\,D(x) + \delta,
+\]
+which covers a scale error, a constant offset, and any combination. Let the tested relation be
+\[
+\sum_i a_i\, D(x_i) = 0,
+\]
+an identity that holds for correct decoding, with the $x_i$ produced by the device and the $a_i$
+fixed by the relation. Substituting the faulty decoder gives the residual
+\[
+s \sum_i a_i D(x_i) \;+\; \delta \sum_i a_i \;=\; \delta \sum_i a_i ,
+\]
+since the first sum vanishes by the identity. Two consequences follow, and they are independent.
+
+\paragraph{The additive error.} The residual is $\delta \sum_i a_i$, so the relation sees $\delta$
+exactly when the coefficients sum to something other than zero. This is often paraphrased as both
+sides decoding the same number of times, and for relations whose coefficients are $\pm 1$ that
+paraphrase is correct. It is not correct in general. The relation $D(c \boxdot a) = c\,D(a)$ for a
+public scalar $c$ decodes once on each side, yet its coefficients sum to $1 - c$, so it does see
+$\delta$ whenever $c \neq 1$. The criterion is the coefficient sum, not the decode count.
+
+\paragraph{The multiplicative error.} The scale $s$ has factored out entirely. It factors out
+because every term of the relation passes through $D$ exactly once, which makes the relation
+homogeneous of degree one in $D$, and a homogeneous relation is invariant under $D \mapsto sD$ by
+definition. Adding more relations of the same shape cannot help, since a system of relations each
+invariant under that map has a scaling-invariant solution set. This is the part that is easy to get
+wrong, and we got it wrong: it is tempting to conclude that no relation among the device's own
+outputs can expose a scale error, and that an externally computed reference is therefore necessary.
+It is not.
+
+\section{Two ways to break the invariance}
+
+A relation is blind to $s$ exactly when it is invariant under $D \mapsto sD$. Anything that breaks
+that invariance exposes the scale error, and there are two ways to break it.
+
+\paragraph{A term the device did not produce.} Put an independently computed value $V$ where a
+device output stood. With one such anchor the residual on a probe $x$ is $(s-1)D(x) + \delta$. Two
+qualifications matter. For a single probe this vanishes along a whole line in $(s, \delta)$, so one
+probe separates nothing; it vanishes on every probe only if $s = 1$ and $\delta = 0$, and only if
+the probes realise at least two distinct values of $D(x)$. And an anchor does not expose both errors
+in general: for $\sum_i a_i D(x_i) + a_V V = 0$ the residual is $(1-s) a_V V + \delta \sum_i a_i$,
+so a relation whose device terms are balanced sees $s$ and not $\delta$.
+
+This route needs a reference, which is the thing relational testing exists to avoid.
+
+\paragraph{A relation that mixes degrees.} The second route needs nothing external. The
+multiplicative homomorphism
+\[
+D(a \boxtimes b) = D(a)\,D(b)
+\]
+is degree one on the left and degree two on the right. It consumes only device outputs, needs no
+reference implementation and no stored answers, and under $D' = sD$ its residual is
+\[
+s\,D(ab) - s^2 D(a)D(b) \;=\; s(1-s)\,D(ab),
+\]
+which vanishes only at $s \in \{0, 1\}$. A relational suite can therefore catch a scale error. The
+exact criterion for invariance is that every homogeneous component of the relation vanish
+identically on correct decodes, of which same-degree homogeneity is the common sufficient case.
+
+\section{A suite that missed it, and by how much}
+
+We applied the criterion to a CKKS conformance suite of our own, released under
+Apache-2.0~\cite{artifact}. It tests three laws: additive homomorphism, distributivity of plaintext
+multiplication, and distributivity of ciphertext multiplication. Every one of them is degree one in
+$D$, and two of the three are also balanced. By the criterion the suite is blind to every scale
+error on all three laws, and blind to every offset on two of them. Measured on the software
+reference at $N = 256$ and scale $2^{22}$, over five seeds:
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+decoder & add-hom & plainmul-dist & ctmul-dist \\
+\midrule
+honest                & 50.74 & 14.46 & 12.02 \\
+scaled by $1.01$      & \textbf{50.76} & \textbf{14.46} & \textbf{12.02} \\
+offset by $0.5$       & 2.36  & \textbf{14.74} & \textbf{12.41} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The scale error is invisible on all three laws, and scores marginally \emph{higher} than honest on
+the first. The offset is caught by additive homomorphism alone, which is the one law whose
+coefficients do not sum to zero, and leaves the balanced pair unmoved. Both predictions hold
+exactly. So the suite sees one of the two affine error modes, on one of its three laws, by accident
+of which identities were chosen and not by design.
+
+The same suite has a second mode in which the authority derives the probe plaintexts itself and
+scores against them. That mode is the anchored case of the previous section, and it catches the
+scale error on all three laws, at $6.64$ bits. The blindness is a property of testing relations
+among the device's own outputs, not of the suite as a whole.
+
+The law that would have caught the scale error is the multiplicative homomorphism, and it is one we
+did not include. Implementing it on the same backend gives an honest score of $14.01$ bits and, at
+$s = 1.01$, a score of $6.66$ bits, which matches the closed form $-\log_2(|s(1-s)|/s^2) = 6.66$ to
+two decimals.
+
+\section{Sensitivity is not refusal}
+
+The last number is where the useful caution lies. A conformance suite does not report a score, it
+issues a verdict, and a verdict compares the score against a floor. Under $D' = sD$ the achieved
+precision of the multiplicative homomorphism is approximately $-\log_2(|1-s|/s)$, so the law refuses
+a scale error only when
+\[
+|1 - s| \;\gtrsim\; s \cdot 2^{-\mathrm{floor}}.
+\]
+At the parameters of the example above the derived floor is $6.0$ bits, and $6.66 > 6.0$, so the law
+detects the fault and still returns a pass. At $N = 8192$ and scale $2^{40}$, where the derived floor
+is $19.0$ bits, the same $1\%$ error is refused comfortably.
+
+Adding the right relation is therefore necessary and not sufficient. A suite reports what its
+relations can see, and refuses what its floors put out of reach, and the two are set independently.
+
+\section{What this means for relational FHE testing}
+
+The criterion is not specific to our suite. It applies to any test that checks identities among a
+device's own decoded outputs, which includes the metamorphic and equivalence-based designs cited
+above. It does not apply to relation checks on ciphertext state, such as the key-free datapath
+checks of~\cite{keyfree}, which verify fixed public linear maps by random projection and never
+decode at all. The decoder is the layer this criterion is about. The practical form is short. For each relation in a suite, compute the coefficient sum and
+the degree structure in $D$. A suite whose relations are all degree-one homogeneous is blind to
+every decoder scale error, whatever else it tests and however many relations it has. A suite whose
+relations are all balanced is blind to every constant decoder offset. Neither property is visible in
+the identities as they are usually written, which is why a suite can have both and nobody notice.
+
+We record this because we had both and did not notice.
+
+\section*{Availability}
+
+The suite, the faulty backends and the measurements above are at
+\begin{center}
+\url{https://github.com/VaultBytes/oracle-free-fhe-conformance}
+\end{center}
+under Apache-2.0.
+
+\begin{thebibliography}{9}
+\bibitem{eidolon} Z.~Xian, Z.~Yan, Y.~Chen, X.~Cao, F.~Ma, D.~Shi, Y.~Jiang. Eidolon: Perform
+  Noise-Aware Fuzzing on FHE Libraries via Equivalence Expression Transformation. Proc. ACM Softw.
+  Eng. 3(FSE), Article FSE102, 2026.
+\bibitem{herta} Y.~Peng, D.~Xiao, Z.~Liu, Z.~Ji, S.~Wang. Detecting and Understanding
+  Vulnerabilities in Fully Homomorphic Encryption Frameworks. arXiv:2606.22519, 2026.
+\bibitem{ckks} J.~H. Cheon, A.~Kim, M.~Kim, Y.~Song. Homomorphic Encryption for Arithmetic of
+  Approximate Numbers. ASIACRYPT 2017.
+\bibitem{keyfree} B.~Alissaei. Where the Information Lives: A Key-Free Observability Decomposition
+  for CKKS Hardware Monitors. Preprint, 20 June 2026. \url{https://doi.org/10.5281/zenodo.20774112}
+\bibitem{artifact} Oracle-Free FHE Conformance.
+  \url{https://github.com/VaultBytes/oracle-free-fhe-conformance}.
+\end{thebibliography}
+
+\end{document}
